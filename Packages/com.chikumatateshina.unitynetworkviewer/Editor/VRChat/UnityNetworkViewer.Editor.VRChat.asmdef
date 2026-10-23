@@ -1,0 +1,36 @@
+{
+    "name": "UnityNetworkViewer.Editor.VRChat",
+    "rootNamespace": "UnityNetworkViewer.Editor.VRChat",
+    "references": [
+        "UnityNetworkViewer.Core",
+        "UnityNetworkViewer.Editor",
+        "VRC.Udon",
+        "VRC.Udon.Editor",
+        "UdonSharp.Runtime",
+        "UdonSharp.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VRC.Udon.Common.dll",
+        "VRCSDK3.dll",
+        "VRCSDKBase.dll",
+        "VRC.Udon.Graph.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNV_VRCHAT_WORLDS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.worlds",
+            "expression": "3.4.0",
+            "define": "UNV_VRCHAT_WORLDS"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -1,4 +1,4 @@
-# Object Relationship Explorer
+# UnityNetworkViewer
 
 Unity / VRChat ワールドプロジェクトの Scene・GameObject・Component・Prefab・Asset・UdonBehaviour・UdonSharp・Udon Graph の関係を
 **型付き有向マルチグラフ**として索引化し、Unity Editor 上で検索・可視化・追跡する Editor 専用拡張です。
@@ -33,42 +33,42 @@ VRChat SDK が無いプロジェクトでも、Unity 標準の解析は動作し
 
 1. [導入ページ](https://chikumatateshina.github.io/UnityNetworkViewer/) の **Add to VCC** を押す
    （または VCC の Settings → Packages → Add Repository に `https://chikumatateshina.github.io/UnityNetworkViewer/index.json` を登録）
-2. プロジェクトの Manage Project から **Object Relationship Explorer** を追加
+2. プロジェクトの Manage Project から **UnityNetworkViewer** を追加
 
 ### Unity Package Manager（Git URL）
 
 Window → Package Manager → 「+」→ **Add package from git URL…** に次を入力します。
 
 ```
-https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.object-relationship-explorer
+https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
 ```
 
-特定の版に固定する場合は、末尾に `#v0.1.1` のようにタグを付けます。
+特定の版に固定する場合は、末尾に `#v0.2.0` のようにタグを付けます。
 
 ### 手動
 
 [Releases](https://github.com/ChikumaTateshina/UnityNetworkViewer/releases) の zip を、プロジェクトの
-`Packages/com.chikumatateshina.object-relationship-explorer/` に展開します。
+`Packages/com.chikumatateshina.unitynetworkviewer/` に展開します。
 
 ## 使い方
 
-`Window > Analysis > Object Relationship Explorer` を開きます。ロード済み Scene から解析を始め、続けてプロジェクト全体をバックグラウンドで索引します。
+`Window > Analysis > UnityNetworkViewer` を開きます。ロード済み Scene から解析を始め、続けてプロジェクト全体をバックグラウンドで索引します。
 あとは Hierarchy や Project でオブジェクトを選ぶと、関係がグラフに表示されます。
 
-画面構成、検索構文、関係の種類と確度、既知の制約は [パッケージの README](Packages/com.chikumatateshina.object-relationship-explorer/README.md) を参照してください。
+画面構成、検索構文、関係の種類と確度、既知の制約は [パッケージの README](Packages/com.chikumatateshina.unitynetworkviewer/README.md) を参照してください。
 
 | 文書 | 内容 |
 |---|---|
-| [README](Packages/com.chikumatateshina.object-relationship-explorer/README.md) | 使い方・関係の種類・既知の制約 |
-| [CHANGELOG](Packages/com.chikumatateshina.object-relationship-explorer/CHANGELOG.md) | 変更履歴 |
-| [architecture.md](Packages/com.chikumatateshina.object-relationship-explorer/Documentation~/architecture.md) | 内部構成 |
-| [provider-contract.md](Packages/com.chikumatateshina.object-relationship-explorer/Documentation~/provider-contract.md) | 解析 Provider の追加方法 |
-| [testing.md](Packages/com.chikumatateshina.object-relationship-explorer/Documentation~/testing.md) | テストの実行方法 |
+| [README](Packages/com.chikumatateshina.unitynetworkviewer/README.md) | 使い方・関係の種類・既知の制約 |
+| [CHANGELOG](Packages/com.chikumatateshina.unitynetworkviewer/CHANGELOG.md) | 変更履歴 |
+| [architecture.md](Packages/com.chikumatateshina.unitynetworkviewer/Documentation~/architecture.md) | 内部構成 |
+| [provider-contract.md](Packages/com.chikumatateshina.unitynetworkviewer/Documentation~/provider-contract.md) | 解析 Provider の追加方法 |
+| [testing.md](Packages/com.chikumatateshina.unitynetworkviewer/Documentation~/testing.md) | テストの実行方法 |
 
 ## リリース手順（メンテナー向け）
 
 1. `package.json` の `version` と `CHANGELOG.md` を更新して main に push
-2. `v<version>` タグを push（例: `git tag v0.1.2 && git push origin v0.1.2`）
+2. `v<version>` タグを push（例: `git tag v0.2.1 && git push origin v0.2.1`）
 3. GitHub Actions が zip を Release に添付し、VPM listing と導入ページを GitHub Pages に再公開します
 
 ## ライセンス
@@ -86,7 +86,7 @@ UdonSharp ソース解析は、VRChat SDK に同梱されている Roslyn（Micr
 An editor-only Unity extension that indexes relationships between scenes, GameObjects, components, prefabs, assets, and VRChat Udon programs (UdonBehaviour, UdonSharp, Udon Graph) as a typed directed multigraph. It visualizes them with highlighting that follows the Unity selection.
 
 - Install with VCC / ALCOM from the [listing page](https://chikumatateshina.github.io/UnityNetworkViewer/), or with the Git URL above in the Unity Package Manager.
-- Open it from `Window > Analysis > Object Relationship Explorer`.
+- Open it from `Window > Analysis > UnityNetworkViewer`.
 - It requires Unity 2022.3. VRChat SDK - Worlds 3.4.0 or later is optional and enables the Udon analysis.
 - Analysis is read-only. It never marks scenes dirty, never saves them, and never opens them on its own.
 - It is licensed under MIT. It is not affiliated with VRChat Inc. or Unity Technologies.

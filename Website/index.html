@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Object Relationship Explorer</title>
+<title>UnityNetworkViewer</title>
 <meta name="description" content="Unity / VRChat の Scene・Prefab・Udon の関係をグラフで可視化する Editor 拡張">
 <style>
   :root {
@@ -42,7 +42,7 @@
 </head>
 <body>
 <main>
-  <h1>Object Relationship Explorer <span class="version" id="ver">…</span></h1>
+  <h1>UnityNetworkViewer <span class="version" id="ver">…</span></h1>
   <p class="lead">Unity / VRChat の Scene・GameObject・Component・Prefab・Asset・Udon の関係を索引化し、選択と連動してグラフ表示する Editor 専用拡張です。</p>
 
   <section>
@@ -50,7 +50,7 @@
     <p><a class="btn" id="addVcc" href="#">Add to VCC</a></p>
     <p class="muted">ボタンが動かない場合は、VCC の Settings → Packages → Add Repository に次の URL を登録してください。</p>
     <div class="row"><code id="listingUrl"></code><button class="btn secondary" data-copy="listingUrl">コピー</button></div>
-    <p class="muted">登録後、プロジェクトの Manage Project から「Object Relationship Explorer」を追加します。</p>
+    <p class="muted">登録後、プロジェクトの Manage Project から「UnityNetworkViewer」を追加します。</p>
   </section>
 
   <section>
@@ -65,7 +65,7 @@
 
   <section>
     <h2>使い方</h2>
-    <p>Window → Analysis → Object Relationship Explorer を開きます。詳細は <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.object-relationship-explorer/README.md">README</a> を参照してください。</p>
+    <p>Window → Analysis → UnityNetworkViewer を開きます。詳細は <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.unitynetworkviewer/README.md">README</a> を参照してください。</p>
     <p class="muted" id="zipLine"></p>
   </section>
   <footer>
@@ -74,7 +74,7 @@
   </footer>
 </main>
 <script>
-  const pkg = 'com.chikumatateshina.object-relationship-explorer';
+  const pkg = 'com.chikumatateshina.unitynetworkviewer';
   const repoUrl = 'https://github.com/ChikumaTateshina/UnityNetworkViewer';
   const listingUrl = new URL('index.json', location.href).href;
   document.getElementById('listingUrl').textContent = listingUrl;

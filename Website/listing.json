@@ -2,5 +2,5 @@
   "name": "UnityNetworkViewer",
   "id": "com.chikumatateshina.vpm",
   "author": "Chikuma Tateshina",
-  "packages": ["com.chikumatateshina.object-relationship-explorer"]
+  "packages": ["com.chikumatateshina.unitynetworkviewer"]
 }
