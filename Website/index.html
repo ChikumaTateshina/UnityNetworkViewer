@@ -61,6 +61,12 @@
   .muted { color: var(--muted); font-size: 13px; }
   a { color: var(--accent); }
   .toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; margin-bottom: 20px; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  section { scroll-margin-top: 16px; }
+  main { padding-bottom: 96px; }
+  .install-fab { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 12px 20px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+  .install-fab:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -207,6 +213,7 @@
     VRChat Inc. / Unity Technologies とは関係のない非公式ツールです。
   </footer>
 </main>
+<a class="btn install-fab" href="#install" aria-label="導入方法へ移動"><span aria-hidden="true">⬇</span> 導入</a>
 <script>
   const pkg = 'com.chikumatateshina.unitynetworkviewer';
   const repoUrl = 'https://github.com/ChikumaTateshina/UnityNetworkViewer';
