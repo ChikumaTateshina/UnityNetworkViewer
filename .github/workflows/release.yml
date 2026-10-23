@@ -1,0 +1,53 @@
+name: Release
+
+# v* タグの push（または手動実行）でパッケージ zip を GitHub Release に添付し、VPM listing を更新する。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  PACKAGE_PATH: Packages/com.chikumatateshina.object-relationship-explorer
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read package.json
+        id: meta
+        run: |
+          echo "name=$(jq -r .name "$PACKAGE_PATH/package.json")" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version "$PACKAGE_PATH/package.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag matches version
+        if: github.ref_type == 'tag'
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${{ steps.meta.outputs.version }}"
+            exit 1
+          fi
+
+      - name: Build zip
+        run: |
+          cd "$PACKAGE_PATH"
+          zip -r -X "$GITHUB_WORKSPACE/${{ steps.meta.outputs.name }}-${{ steps.meta.outputs.version }}.zip" .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
+          files: ${{ steps.meta.outputs.name }}-${{ steps.meta.outputs.version }}.zip
+          generate_release_notes: true
+
+  # GITHUB_TOKEN で作成した Release は他のワークフローを起動しないため、ここから直接呼ぶ
+  pages:
+    needs: release
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

@@ -1,0 +1,6 @@
+{
+  "name": "Chikuma Tateshina VPM Listing",
+  "id": "com.chikumatateshina.vpm",
+  "author": "Chikuma Tateshina",
+  "packages": ["com.chikumatateshina.object-relationship-explorer"]
+}

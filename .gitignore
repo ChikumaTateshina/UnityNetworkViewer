@@ -1,0 +1,8 @@
+# 公開するのはパッケージ本体・CI・導入ページのみ
+/*
+!/.gitignore
+!/.github/
+!/Packages/
+!/Website/
+/Packages/*
+!/Packages/com.chikumatateshina.object-relationship-explorer/
