@@ -38,7 +38,8 @@ namespace UnityNetworkViewer.Editor.UI
 
         public static void Repaint()
         {
-            _builtRevision = -1;
+            // 無効時は Scene View を再描画しない
+            if (_vm == null || !UnvSettings.instance.sceneViewOverlay) return;
             SceneView.RepaintAll();
         }
 
@@ -46,7 +47,7 @@ namespace UnityNetworkViewer.Editor.UI
         {
             if (_vm == null || !UnvSettings.instance.sceneViewOverlay) return;
             if (Event.current.type != EventType.Repaint) return;
-            if (_builtRevision != _vm.ViewRevision) Build();
+            if (_builtRevision != _vm.HighlightRevision) Build();
 
             var prevZ = Handles.zTest;
             Handles.zTest = UnityEngine.Rendering.CompareFunction.Always;
@@ -66,7 +67,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         static void Build()
         {
-            _builtRevision = _vm.ViewRevision;
+            _builtRevision = _vm.HighlightRevision;
             Lines.Clear();
             Boxes.Clear();
             if (_vm.Roots.Count == 0) return;

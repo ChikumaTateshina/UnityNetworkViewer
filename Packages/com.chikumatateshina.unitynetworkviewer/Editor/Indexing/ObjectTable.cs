@@ -8,8 +8,9 @@ using Object = UnityEngine.Object;
 namespace UnityNetworkViewer.Editor
 {
     /// <summary>
-    /// ロード済み Scene / Prefab Asset 内の GameObject と Component を一度だけ列挙し、
+    /// ロード済み Scene（全体またはチャンク）/ Prefab Asset 内の GameObject と Component を一度だけ列挙し、
     /// ID をバッチで計算して Provider 間で共有する。読み取りのみで Dirty にしない。
+    /// Scene の場合は instanceId→ID のキャッシュを Scheduler と共有し、チャンクをまたぐ参照の ID 計算を省く。
     /// </summary>
     public sealed class ObjectTable
     {
@@ -21,6 +22,8 @@ namespace UnityNetworkViewer.Editor
         /// <summary>Scene ノード、または Prefab Asset ノードのID。</summary>
         public readonly string ContainerId;
         public readonly GameObject PrefabRoot;
+        /// <summary>Scene の一部（チャンク）だけを列挙した表か。</summary>
+        public bool IsChunk => Target != null && Target.Kind == AnalysisTargetKind.SceneChunk;
         public readonly List<GameObject> GameObjects = new List<GameObject>();
         /// <summary>GameObjects と同順。Missing Script の位置は null。</summary>
         public readonly List<Component[]> ComponentsOf = new List<Component[]>();
@@ -29,6 +32,9 @@ namespace UnityNetworkViewer.Editor
         public string InvalidReason { get; private set; }
 
         readonly Dictionary<int, string> _ids = new Dictionary<int, string>();
+        // 表に列挙したオブジェクト（ID を計算しただけの表外のオブジェクトは含まない）
+        readonly HashSet<int> _members = new HashSet<int>();
+        Dictionary<int, string> _shared;
         readonly Dictionary<int, string> _paths = new Dictionary<int, string>();
         readonly Dictionary<int, int> _goIndex = new Dictionary<int, int>();
 
@@ -43,19 +49,38 @@ namespace UnityNetworkViewer.Editor
             PrefabRoot = prefabRoot;
         }
 
-        public static ObjectTable Create(AnalysisTarget target)
+        public static ObjectTable Create(AnalysisTarget target) => Create(target, null);
+
+        /// <param name="sharedIds">Scene 単位で共有する instanceId→ID キャッシュ（null 可）。</param>
+        public static ObjectTable Create(AnalysisTarget target, Dictionary<int, string> sharedIds)
         {
-            if (target.Kind == AnalysisTargetKind.LoadedScene)
+            if (target.Kind == AnalysisTargetKind.LoadedScene || target.Kind == AnalysisTargetKind.SceneChunk)
             {
                 var scene = target.GetScene();
                 var table = new ObjectTable(target, false, ObjectIdUtility.GetSceneGuid(scene), null, scene.path,
-                    scene.IsValid() ? ObjectIdUtility.GetSceneNodeId(scene) : null, null);
+                    scene.IsValid() ? ObjectIdUtility.GetSceneNodeId(scene) : null, null) { _shared = sharedIds };
                 if (!scene.IsValid() || !scene.isLoaded)
                 {
                     table.InvalidReason = "Scene is not loaded";
                     return table;
                 }
-                table.Collect(scene.GetRootGameObjects());
+                if (target.Kind == AnalysisTargetKind.LoadedScene)
+                {
+                    table.Collect(scene.GetRootGameObjects(), false);
+                    return table;
+                }
+                var rootIds = target.ChunkRoots ?? new[] { target.ChunkRootInstanceId };
+                var roots = new GameObject[rootIds.Length];
+                for (int i = 0; i < rootIds.Length; i++)
+                {
+                    roots[i] = EditorUtility.InstanceIDToObject(rootIds[i]) as GameObject;
+                    if (roots[i] == null || roots[i].scene != scene)
+                    {
+                        table.InvalidReason = "Chunk root no longer exists in the scene";
+                        return table;
+                    }
+                }
+                table.Collect(roots, target.ChunkIsSingle);
                 return table;
             }
 
@@ -68,7 +93,7 @@ namespace UnityNetworkViewer.Editor
                     table.InvalidReason = "Prefab could not be loaded";
                     return table;
                 }
-                table.Collect(new[] { root });
+                table.Collect(new[] { root }, false);
                 return table;
             }
 
@@ -76,7 +101,7 @@ namespace UnityNetworkViewer.Editor
             return empty;
         }
 
-        void Collect(GameObject[] roots)
+        void Collect(GameObject[] roots, bool rootsOnly)
         {
             var stack = new Stack<Transform>();
             for (int i = roots.Length - 1; i >= 0; i--) if (roots[i] != null) stack.Push(roots[i].transform);
@@ -89,19 +114,62 @@ namespace UnityNetworkViewer.Editor
                 var comps = go.GetComponents<Component>();
                 ComponentsOf.Add(comps);
                 foreach (var c in comps) if (c != null) Components.Add(c);
+                if (rootsOnly) continue;
                 for (int i = t.childCount - 1; i >= 0; i--) stack.Push(t.GetChild(i));
             }
 
-            var all = new Object[GameObjects.Count + Components.Count];
-            int k = 0;
-            foreach (var go in GameObjects) all[k++] = go;
-            foreach (var c in Components) all[k++] = c;
-            var ids = ObjectIdUtility.GetIds(all);
-            for (int i = 0; i < all.Length; i++) _ids[all[i].GetInstanceID()] = ids[i];
+            var all = new List<Object>(GameObjects.Count + Components.Count);
+            foreach (var go in GameObjects) all.Add(go);
+            foreach (var c in Components) all.Add(c);
+            foreach (var o in all) _members.Add(o.GetInstanceID());
+            PrimeIds(all);
             IsValid = true;
         }
 
-        public bool Contains(Object obj) => obj != null && _ids.ContainsKey(obj.GetInstanceID());
+        /// <summary>まだ ID の無いオブジェクトの ID をまとめて計算する（GlobalObjectId のバッチ API）。</summary>
+        public void PrimeIds(IEnumerable<Object> objects)
+        {
+            List<Object> missing = null;
+            HashSet<int> seen = null;
+            foreach (var o in objects)
+            {
+                if (o == null) continue;
+                int iid = o.GetInstanceID();
+                if (_ids.ContainsKey(iid)) continue;
+                if (_shared != null && _shared.TryGetValue(iid, out var cached))
+                {
+                    _ids[iid] = cached;
+                    continue;
+                }
+                // 未保存の新しい Component（ID を知らないもの）は一時 ID にする（GlobalObjectId の割り当てを起こさない）
+                if (o is Component comp && NewObjectRegistry.HasNewComponents(comp.gameObject))
+                {
+                    Remember(o, NodeIds.SessionObject(iid));
+                    continue;
+                }
+                if (missing == null)
+                {
+                    missing = new List<Object>();
+                    seen = new HashSet<int>();
+                }
+                if (seen.Add(iid)) missing.Add(o);
+            }
+            if (missing == null) return;
+            var arr = missing.ToArray();
+            var ids = ObjectIdUtility.GetIds(arr);
+            for (int i = 0; i < arr.Length; i++) Remember(arr[i], ids[i]);
+        }
+
+        void Remember(Object o, string id)
+        {
+            int iid = o.GetInstanceID();
+            _ids[iid] = id;
+            // Scene キャッシュには Scene 内オブジェクトの永続 ID のみ入れる（一時 ID は保存後に変わるため入れない）
+            if (_shared != null && id != null && !NodeIds.IsSession(id) && !EditorUtility.IsPersistent(o)) _shared[iid] = id;
+        }
+
+        /// <summary>表に列挙したオブジェクトか（チャンクの場合はチャンク内）。表外の参照先は仮ノードとして扱う。</summary>
+        public bool Contains(Object obj) => obj != null && _members.Contains(obj.GetInstanceID());
 
         public int IndexOf(GameObject go) => go != null && _goIndex.TryGetValue(go.GetInstanceID(), out int i) ? i : -1;
 
@@ -111,8 +179,13 @@ namespace UnityNetworkViewer.Editor
             if (obj == null) return null;
             int iid = obj.GetInstanceID();
             if (_ids.TryGetValue(iid, out var id)) return id;
+            if (_shared != null && _shared.TryGetValue(iid, out id))
+            {
+                _ids[iid] = id;
+                return id;
+            }
             id = ObjectIdUtility.GetId(obj);
-            _ids[iid] = id;
+            Remember(obj, id);
             return id;
         }
 
@@ -188,6 +261,27 @@ namespace UnityNetworkViewer.Editor
         {
             if (obj is GameObject go && Contains(go)) return CreateGameObjectNode(go, providerId);
             if (obj is Component c && Contains(c)) return CreateComponentNode(c, providerId);
+
+            // 同じ Scene の表外（別チャンク）のオブジェクトは、Scene GUID と階層パスを表のキャッシュから作る軽量な仮ノードにする
+            var owner = obj as GameObject ?? (obj as Component)?.gameObject;
+            if (owner != null && Target != null && SceneGuid != null && !EditorUtility.IsPersistent(obj) && owner.scene.path == AssetPath)
+            {
+                string id = IdOf(obj);
+                var node = new GraphNode
+                {
+                    Id = id,
+                    Kind = obj is GameObject ? NodeKind.GameObject : NodeKind.Component,
+                    Name = obj is Component comp ? comp.GetType().Name : owner.name,
+                    TypeName = obj.GetType().Name,
+                    SceneGuid = SceneGuid,
+                    HierarchyPath = obj is Component ? PathOf(owner) + "/" + obj.GetType().Name : PathOf(owner),
+                    Flags = NodeFlags.Placeholder,
+                    ProviderId = providerId,
+                };
+                if (NodeIds.IsSession(id)) node.Flags |= NodeFlags.Transient;
+                return node;
+            }
+
             var ph = ObjectIdUtility.CreatePlaceholder(obj, IdOf(obj));
             ph.ProviderId = providerId;
             return ph;

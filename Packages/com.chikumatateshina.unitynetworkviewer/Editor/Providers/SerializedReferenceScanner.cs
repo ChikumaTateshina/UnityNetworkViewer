@@ -53,6 +53,8 @@ namespace UnityNetworkViewer.Editor
             if (source == null) return 0;
             int found = 0;
             int limit = Math.Max(1000, settings.maxPropertiesPerObject);
+            // Override 判定は Prefab Instance 内のオブジェクトでのみ意味を持つ（それ以外では呼ばない）
+            bool inPrefabInstance = PrefabUtility.IsPartOfPrefabInstance(source);
             using (var so = new SerializedObject(source))
             {
                 var it = so.GetIterator();
@@ -82,19 +84,23 @@ namespace UnityNetworkViewer.Editor
                         Target = value,
                         IsMissing = missing,
                         MissingInstanceId = instanceId,
-                        IsPrefabOverride = SafePrefabOverride(it),
+                        IsPrefabOverride = inPrefabInstance && SafePrefabOverride(it),
                         IsArrayElement = path.EndsWith("]", StringComparison.Ordinal),
                         IsManagedReference = path.Contains("managedReferences") || path.Contains("references.RefIds"),
                     };
 
-                    var m = PersistentCallTarget.Match(path);
-                    if (m.Success)
+                    // 正規表現は UnityEvent らしい末尾のときだけ評価する
+                    if (path.EndsWith(".m_Target", StringComparison.Ordinal))
                     {
-                        info.IsUnityEventTarget = true;
-                        var methodProp = so.FindProperty(m.Groups[1].Value + "m_MethodName");
-                        info.UnityEventMethod = methodProp != null ? methodProp.stringValue : null;
+                        var m = PersistentCallTarget.Match(path);
+                        if (m.Success)
+                        {
+                            info.IsUnityEventTarget = true;
+                            var methodProp = so.FindProperty(m.Groups[1].Value + "m_MethodName");
+                            info.UnityEventMethod = methodProp != null ? methodProp.stringValue : null;
+                        }
                     }
-                    else if (PersistentCallArgument.IsMatch(path))
+                    else if (path.EndsWith(".m_ObjectArgument", StringComparison.Ordinal) && PersistentCallArgument.IsMatch(path))
                     {
                         info.IsUnityEventArgument = true;
                     }

@@ -21,7 +21,7 @@ namespace UnityNetworkViewer.Editor.VRChat
     internal static class UdonUtil
     {
         public static bool IsHierarchyTarget(AnalysisTarget t)
-            => t.Kind == AnalysisTargetKind.LoadedScene ||
+            => t.Kind == AnalysisTargetKind.LoadedScene || t.Kind == AnalysisTargetKind.SceneChunk ||
                (t.Kind == AnalysisTargetKind.Asset && t.Path != null && t.Path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>UdonSharp の内部管理用シンボルは参照として扱わない。</summary>

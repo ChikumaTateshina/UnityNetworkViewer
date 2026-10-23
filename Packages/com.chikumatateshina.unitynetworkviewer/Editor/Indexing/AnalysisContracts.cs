@@ -15,9 +15,17 @@ namespace UnityNetworkViewer.Editor
         UnloadedScene,
         /// <summary>Prefab / Controller / Clip / Script / Udon Program 等の Asset。</summary>
         Asset,
+        /// <summary>
+        /// ロード済み Scene の一部（GameObject の部分木、または単独の GameObject）。
+        /// 大きな Scene を小さな単位に分けて時間予算内で解析し、変更のあったチャンクだけを再解析するために使う。
+        /// </summary>
+        SceneChunk,
     }
 
-    /// <summary>解析単位。キーは「scene:{guid}」「asset:{guid}」で、Provider と組み合わせて owner キーになる。</summary>
+    /// <summary>
+    /// 解析単位。キーは「scene:{guid}」「asset:{guid}」で、Provider と組み合わせて owner キーになる。
+    /// チャンクのキーは「scene:{guid}#c{instanceId}」（部分木）/「scene:{guid}#s{instanceId}」（単独）。
+    /// </summary>
     public sealed class AnalysisTarget : IEquatable<AnalysisTarget>
     {
         public AnalysisTargetKind Kind { get; private set; }
@@ -25,6 +33,15 @@ namespace UnityNetworkViewer.Editor
         public string Path { get; private set; }
         /// <summary>未保存 Scene のみ使用。</summary>
         public int SceneHandle { get; private set; }
+        /// <summary>チャンクのキーとなる GameObject の instanceId（SceneChunk のみ。部分木の組では先頭の部分木）。</summary>
+        public int ChunkRootInstanceId { get; private set; }
+        /// <summary>true ならチャンクはルート GameObject 単独（子は別チャンク）。</summary>
+        public bool ChunkIsSingle { get; private set; }
+        /// <summary>チャンクに含まれる部分木のルート（兄弟の小さな部分木をまとめたもの）。null の場合は <see cref="ChunkRootInstanceId"/> のみ。</summary>
+        public int[] ChunkRoots { get; private set; }
+
+        /// <summary>Scene 単位のキー（チャンクの場合も所属 Scene のキー）。</summary>
+        public string SceneKey => string.IsNullOrEmpty(Guid) ? "scene:h" + SceneHandle : "scene:" + Guid;
 
         public string Key
         {
@@ -34,14 +51,33 @@ namespace UnityNetworkViewer.Editor
                 {
                     case AnalysisTargetKind.LoadedScene:
                     case AnalysisTargetKind.UnloadedScene:
-                        return string.IsNullOrEmpty(Guid) ? "scene:h" + SceneHandle : "scene:" + Guid;
+                        return SceneKey;
+                    case AnalysisTargetKind.SceneChunk:
+                        return ChunkKey(SceneKey, ChunkRootInstanceId, ChunkIsSingle);
                     default:
                         return "asset:" + Guid;
                 }
             }
         }
 
+        public static string ChunkKey(string sceneKey, int rootInstanceId, bool single)
+            => sceneKey + (single ? "#s" : "#c") + rootInstanceId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
         public bool IsScene => Kind != AnalysisTargetKind.Asset;
+
+        public static AnalysisTarget ForSceneChunk(Scene scene, int rootInstanceId, bool single, int[] roots = null)
+        {
+            return new AnalysisTarget
+            {
+                Kind = AnalysisTargetKind.SceneChunk,
+                Guid = ObjectIdUtility.GetSceneGuid(scene),
+                Path = scene.path,
+                SceneHandle = scene.handle,
+                ChunkRootInstanceId = rootInstanceId,
+                ChunkIsSingle = single,
+                ChunkRoots = roots,
+            };
+        }
 
         public static AnalysisTarget ForLoadedScene(Scene scene)
         {
@@ -72,6 +108,18 @@ namespace UnityNetworkViewer.Editor
         public static AnalysisTarget FromKey(string key)
         {
             if (string.IsNullOrEmpty(key)) return null;
+            int hash = key.IndexOf('#');
+            if (hash > 0 && key.StartsWith("scene:", StringComparison.Ordinal))
+            {
+                // チャンク: ルート GameObject が同じ Scene に残っていれば復元する
+                if (hash + 2 > key.Length) return null;
+                bool single = key[hash + 1] == 's';
+                if (!int.TryParse(key.Substring(hash + 2), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int iid)) return null;
+                var go = EditorUtility.InstanceIDToObject(iid) as GameObject;
+                if (go == null || !go.scene.IsValid() || !go.scene.isLoaded) return null;
+                var chunk = ForSceneChunk(go.scene, iid, single);
+                return chunk.SceneKey == key.Substring(0, hash) ? chunk : null;
+            }
             if (key.StartsWith("scene:h", StringComparison.Ordinal)) return null;
             if (key.StartsWith("scene:", StringComparison.Ordinal))
             {
@@ -90,7 +138,7 @@ namespace UnityNetworkViewer.Editor
 
         public Scene GetScene()
         {
-            if (Kind != AnalysisTargetKind.LoadedScene) return default;
+            if (Kind != AnalysisTargetKind.LoadedScene && Kind != AnalysisTargetKind.SceneChunk) return default;
             if (!string.IsNullOrEmpty(Path))
             {
                 var s = SceneManager.GetSceneByPath(Path);
@@ -132,23 +180,52 @@ namespace UnityNetworkViewer.Editor
         IEnumerable<string> AssetSearchFilters { get; }
     }
 
+    /// <summary>
+    /// 解析の前に、複数フレームに分けて準備（ファイルの読み込み・依存 Asset の構築など）が必要な Provider。
+    /// Scheduler は <see cref="Prepare"/> が true を返すまで毎フレーム呼び、その後 Analyze を呼ぶ。
+    /// Prepare は時間予算（<see cref="AnalysisContext.OutOfTime"/>）を見て早めに戻ること。
+    /// Prepare を呼ばずに Analyze された場合も（同期的に）正しく動作すること。
+    /// </summary>
+    public interface IPreparedAnalysisProvider
+    {
+        bool Prepare(AnalysisTarget target, AnalysisContext context);
+    }
+
     public sealed class AnalysisContext
     {
         public UnvSettings Settings { get; }
         public PrefabStructureCache PrefabStructures { get; }
         readonly Dictionary<string, ObjectTable> _tables = new Dictionary<string, ObjectTable>();
+        readonly Func<string, Dictionary<int, string>> _sceneIdCache;
+        readonly Func<bool> _outOfTime;
 
         public AnalysisContext(UnvSettings settings, PrefabStructureCache prefabStructures)
+            : this(settings, prefabStructures, null, null)
+        {
+        }
+
+        /// <param name="sceneIdCache">Scene キー → instanceId→ノードID のキャッシュ（チャンク間で共有）。</param>
+        /// <param name="outOfTime">フレームの時間予算を使い切ったか。</param>
+        public AnalysisContext(UnvSettings settings, PrefabStructureCache prefabStructures,
+            Func<string, Dictionary<int, string>> sceneIdCache, Func<bool> outOfTime)
         {
             Settings = settings;
             PrefabStructures = prefabStructures;
+            _sceneIdCache = sceneIdCache;
+            _outOfTime = outOfTime;
         }
 
-        /// <summary>ロード済み Scene / Prefab Asset のオブジェクト表。同一ターゲットの Provider 間で共有する。</summary>
+        /// <summary>このフレームの時間予算を使い切ったか（予算なしの同期実行では常に false）。</summary>
+        public bool OutOfTime => _outOfTime != null && _outOfTime();
+
+        /// <summary>ロード済み Scene / チャンク / Prefab Asset のオブジェクト表。同一ターゲットの Provider 間で共有する。</summary>
         public ObjectTable GetTable(AnalysisTarget target)
         {
             if (_tables.TryGetValue(target.Key, out var table)) return table;
-            table = ObjectTable.Create(target);
+            var cache = target.Kind == AnalysisTargetKind.SceneChunk || target.Kind == AnalysisTargetKind.LoadedScene
+                ? _sceneIdCache?.Invoke(target.SceneKey)
+                : null;
+            table = ObjectTable.Create(target, cache);
             _tables[target.Key] = table;
             return table;
         }

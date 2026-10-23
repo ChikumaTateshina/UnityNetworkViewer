@@ -47,8 +47,8 @@ namespace UnityNetworkViewer.Core
     public sealed class GraphStore
     {
         readonly Dictionary<string, GraphNode> _nodes = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
-        // nodeId → (ownerKey → 提供されたノード)
-        readonly Dictionary<string, Dictionary<string, GraphNode>> _contributions = new Dictionary<string, Dictionary<string, GraphNode>>(StringComparer.Ordinal);
+        // nodeId → 提供元（ownerKey, ノード）の小さな列。大半のノードは提供元が 1〜2 件のため Dictionary を持たない
+        readonly Dictionary<string, Contributions> _contributions = new Dictionary<string, Contributions>(StringComparer.Ordinal);
         readonly Dictionary<string, GraphEdge> _edges = new Dictionary<string, GraphEdge>(StringComparer.Ordinal);
         readonly Dictionary<string, string> _edgeOwner = new Dictionary<string, string>(StringComparer.Ordinal);
         readonly Dictionary<string, HashSet<string>> _out = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -60,6 +60,37 @@ namespace UnityNetworkViewer.Core
         readonly Dictionary<string, HashSet<string>> _byAsset = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         readonly Dictionary<string, HashSet<string>> _byProvider = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         readonly Dictionary<string, HashSet<string>> _dependencyToOwners = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // targetKey → owner、および基底キー（'#' より前。Scene のチャンクをまとめて引く）→ owner
+        readonly Dictionary<string, HashSet<string>> _ownersByTarget = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        readonly Dictionary<string, HashSet<string>> _ownersByBaseTarget = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        sealed class Contributions
+        {
+            public readonly List<KeyValuePair<string, GraphNode>> Items = new List<KeyValuePair<string, GraphNode>>(1);
+
+            public int Count => Items.Count;
+
+            public void Set(string owner, GraphNode node)
+            {
+                for (int i = 0; i < Items.Count; i++)
+                {
+                    if (!string.Equals(Items[i].Key, owner, StringComparison.Ordinal)) continue;
+                    Items[i] = new KeyValuePair<string, GraphNode>(owner, node);
+                    return;
+                }
+                Items.Add(new KeyValuePair<string, GraphNode>(owner, node));
+            }
+
+            public void Remove(string owner)
+            {
+                for (int i = 0; i < Items.Count; i++)
+                {
+                    if (!string.Equals(Items[i].Key, owner, StringComparison.Ordinal)) continue;
+                    Items.RemoveAt(i);
+                    return;
+                }
+            }
+        }
 
         static readonly HashSet<string> EmptySet = new HashSet<string>();
 
@@ -67,6 +98,8 @@ namespace UnityNetworkViewer.Core
         GraphChangedEventArgs _pendingChange;
 
         public long Revision { get; private set; }
+        /// <summary>永続化対象（キャッシュ保存される owner）が変化するたびに増える。保存の要否判定に使う。</summary>
+        public long PersistentRevision { get; private set; }
         public int NodeCount => _nodes.Count;
         public int EdgeCount => _edges.Count;
         public int OwnerCount => _owners.Count;
@@ -147,7 +180,7 @@ namespace UnityNetworkViewer.Core
         public IEnumerable<string> GetNodeOwners(string nodeId)
         {
             if (nodeId != null && _contributions.TryGetValue(nodeId, out var c))
-                foreach (var k in c.Keys) yield return k;
+                foreach (var kv in c.Items) yield return kv.Key;
         }
 
         public IEnumerable<AnalysisDiagnostic> AllDiagnostics()
@@ -202,7 +235,10 @@ namespace UnityNetworkViewer.Core
             _byAsset.Clear();
             _byProvider.Clear();
             _dependencyToOwners.Clear();
+            _ownersByTarget.Clear();
+            _ownersByBaseTarget.Clear();
             Revision++;
+            PersistentRevision++;
             NotifyChanged(null, true);
         }
 
@@ -228,6 +264,8 @@ namespace UnityNetworkViewer.Core
                 Metadata = metadata?.Clone() ?? new OwnerMetadata { ProviderId = OwnerKeys.GetProviderId(ownerKey), TargetKey = OwnerKeys.GetTargetKey(ownerKey) },
             };
             _owners.Add(ownerKey, record);
+            IndexOwner(ownerKey);
+            if (record.Metadata.Persistent) PersistentRevision++;
 
             foreach (var node in result.Nodes)
             {
@@ -284,10 +322,39 @@ namespace UnityNetworkViewer.Core
         /// <summary>指定した解析単位（targetKey）を持つ owner をすべて返す。</summary>
         public List<string> FindOwnersByTarget(string targetKey)
         {
-            var list = new List<string>();
-            foreach (var key in _owners.Keys)
-                if (OwnerKeys.GetTargetKey(key) == targetKey) list.Add(key);
-            return list;
+            return targetKey != null && _ownersByTarget.TryGetValue(targetKey, out var set) ? new List<string>(set) : new List<string>();
+        }
+
+        /// <summary>基底キー（例: "scene:{guid}"）と、その下位キー（"scene:{guid}#…"）を持つ owner をすべて返す。</summary>
+        public List<string> FindOwnersByBaseTarget(string baseKey)
+        {
+            return baseKey != null && _ownersByBaseTarget.TryGetValue(baseKey, out var set) ? new List<string>(set) : new List<string>();
+        }
+
+        public bool HasOwnersForTarget(string targetKey) => targetKey != null && _ownersByTarget.ContainsKey(targetKey);
+
+        public bool HasOwnersForBaseTarget(string baseKey) => baseKey != null && _ownersByBaseTarget.ContainsKey(baseKey);
+
+        /// <summary>targetKey の '#' より前（Scene のチャンクキーから Scene キーを得る）。</summary>
+        public static string GetBaseTargetKey(string targetKey)
+        {
+            if (targetKey == null) return null;
+            int i = targetKey.IndexOf('#');
+            return i < 0 ? targetKey : targetKey.Substring(0, i);
+        }
+
+        void IndexOwner(string ownerKey)
+        {
+            string target = OwnerKeys.GetTargetKey(ownerKey);
+            GetOrCreate(_ownersByTarget, target).Add(ownerKey);
+            GetOrCreate(_ownersByBaseTarget, GetBaseTargetKey(target)).Add(ownerKey);
+        }
+
+        void UnindexOwner(string ownerKey)
+        {
+            string target = OwnerKeys.GetTargetKey(ownerKey);
+            Remove(_ownersByTarget, target, ownerKey);
+            Remove(_ownersByBaseTarget, GetBaseTargetKey(target), ownerKey);
         }
 
         void EnsureEndpoint(string ownerKey, OwnerRecord record, string nodeId)
@@ -313,18 +380,19 @@ namespace UnityNetworkViewer.Core
         {
             if (!_contributions.TryGetValue(node.Id, out var contribs))
             {
-                contribs = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+                contribs = new Contributions();
                 _contributions.Add(node.Id, contribs);
             }
-            contribs[ownerKey] = node;
+            contribs.Set(ownerKey, node);
             RecomputeEffective(node.Id, contribs);
         }
 
-        void RecomputeEffective(string nodeId, Dictionary<string, GraphNode> contribs)
+        void RecomputeEffective(string nodeId, Contributions contribs)
         {
             GraphNode best = null;
-            foreach (var n in contribs.Values)
+            foreach (var kv in contribs.Items)
             {
+                var n = kv.Value;
                 if (best == null) { best = n; continue; }
                 bool bestPh = best.IsPlaceholder, nPh = n.IsPlaceholder;
                 if (bestPh && !nPh) best = n;
@@ -349,6 +417,8 @@ namespace UnityNetworkViewer.Core
         {
             if (!_owners.TryGetValue(ownerKey, out var record)) return;
             _owners.Remove(ownerKey);
+            UnindexOwner(ownerKey);
+            if (record.Metadata != null && record.Metadata.Persistent) PersistentRevision++;
 
             foreach (var edgeId in record.EdgeIds)
             {
@@ -371,7 +441,7 @@ namespace UnityNetworkViewer.Core
                         string heir = FindIncidentEdgeOwner(node.Id);
                         var ph = node.Clone();
                         ph.Flags |= NodeFlags.Placeholder;
-                        contribs[heir] = ph;
+                        contribs.Set(heir, ph);
                         if (_owners.TryGetValue(heir, out var heirRecord)) heirRecord.Nodes.Add(ph);
                         RecomputeEffective(node.Id, contribs);
                     }

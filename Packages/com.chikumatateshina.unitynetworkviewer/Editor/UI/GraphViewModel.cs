@@ -20,6 +20,22 @@ namespace UnityNetworkViewer.Editor.UI
         KeepViewAndNotify,
     }
 
+    /// <summary>表示状態の変化の種類。受け手は必要な更新だけを行う。</summary>
+    [Flags]
+    public enum ViewChange
+    {
+        None = 0,
+        /// <summary>ノード位置のみ（ドラッグ・レイアウト適用）。</summary>
+        Positions = 1,
+        /// <summary>選択・ハイライト・経路など強調表示。</summary>
+        Selection = 2,
+        /// <summary>表示ノード集合・フィルタ。</summary>
+        Structure = 4,
+        /// <summary>索引（ストア）の内容。</summary>
+        Store = 8,
+        All = Positions | Selection | Structure | Store,
+    }
+
     public enum GroupByMode
     {
         Scene,
@@ -93,9 +109,13 @@ namespace UnityNetworkViewer.Editor.UI
         public bool ViewTruncated;
         public int ViewTruncatedCount;
         public long ViewRevision { get; private set; }
+        /// <summary>ノード位置が変わるたびに増える（描画の再生成判定用）。</summary>
+        public long PositionsRevision { get; private set; }
+        /// <summary>ハイライト（選択からの関連）が変わるたびに増える。</summary>
+        public long HighlightRevision { get; private set; }
         public bool LayoutInProgress => _layoutTask != null;
 
-        public event Action Changed;
+        public event Action<ViewChange> Changed;
         public event Action LayoutApplied;
         /// <summary>自動パン要求（ワールド座標の中心）。</summary>
         public event Action<Vector2> FocusRequested;
@@ -103,6 +123,12 @@ namespace UnityNetworkViewer.Editor.UI
         readonly HashSet<string> _priorityRequested = new HashSet<string>(StringComparer.Ordinal);
         List<string> _visibleEdgesCache;
         long _visibleEdgesRevision = -1;
+        long _visibleEdgesStoreRevision = -1;
+        List<string> _drawnCache;
+        long _drawnRevision = -1;
+        long _drawnStoreRevision = -1;
+        readonly HashSet<string> _pendingOwners = new HashSet<string>(StringComparer.Ordinal);
+        bool _pendingCleared;
         Task<LayoutResult> _layoutTask;
         CancellationTokenSource _layoutCts;
         List<string> _layoutIds;
@@ -125,11 +151,17 @@ namespace UnityNetworkViewer.Editor.UI
             _layoutCts?.Cancel();
         }
 
-        void Bump(bool structure)
+        void Bump(bool structure) => Bump(structure ? ViewChange.Structure | ViewChange.Selection : ViewChange.Selection);
+
+        void Bump(ViewChange change)
         {
             ViewRevision++;
-            if (structure) _visibleEdgesRevision = -1;
-            Changed?.Invoke();
+            if ((change & ViewChange.Structure) != 0)
+            {
+                _visibleEdgesRevision = -1;
+                _drawnRevision = -1;
+            }
+            Changed?.Invoke(change);
         }
 
         // ------------------------------------------------------------------ Query options
@@ -259,6 +291,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         public void RecomputeHighlight()
         {
+            HighlightRevision++;
             if (Roots.Count == 0)
             {
                 Highlight = new SubgraphResult();
@@ -375,15 +408,16 @@ namespace UnityNetworkViewer.Editor.UI
         public void TogglePin(string id)
         {
             if (!Pinned.Remove(id)) Pinned.Add(id);
-            Bump(false);
+            PositionsRevision++;
+            Changed?.Invoke(ViewChange.Positions);
         }
 
         public void MoveNode(string id, Vector2 world)
         {
             Positions[id] = world;
             Pinned.Add(id);
-            ViewRevision++;
-            Changed?.Invoke();
+            PositionsRevision++;
+            Changed?.Invoke(ViewChange.Positions);
         }
 
         /// <summary>経路探索（FR-004）。見つかった経路のノードを表示に加えて強調する。</summary>
@@ -452,16 +486,21 @@ namespace UnityNetworkViewer.Editor.UI
             return Store.ContainsNode(id);
         }
 
-        public List<string> GetDrawnNodes()
+        /// <summary>描画対象ノード（キャッシュ。呼び出し側で変更しないこと）。</summary>
+        public IReadOnlyList<string> GetDrawnNodes()
         {
+            if (_drawnCache != null && _drawnRevision == ViewRevision && _drawnStoreRevision == Store.Revision) return _drawnCache;
             var list = new List<string>();
             foreach (var id in Visible) if (IsDrawn(id)) list.Add(id);
+            _drawnCache = list;
+            _drawnRevision = ViewRevision;
+            _drawnStoreRevision = Store.Revision;
             return list;
         }
 
         public List<string> GetVisibleEdges()
         {
-            if (_visibleEdgesCache != null && _visibleEdgesRevision == ViewRevision) return _visibleEdgesCache;
+            if (_visibleEdgesCache != null && _visibleEdgesRevision == ViewRevision && _visibleEdgesStoreRevision == Store.Revision) return _visibleEdgesCache;
             var list = new List<string>();
             foreach (var id in Visible)
             {
@@ -475,6 +514,7 @@ namespace UnityNetworkViewer.Editor.UI
             }
             _visibleEdgesCache = list;
             _visibleEdgesRevision = ViewRevision;
+            _visibleEdgesStoreRevision = Store.Revision;
             return list;
         }
 
@@ -482,14 +522,51 @@ namespace UnityNetworkViewer.Editor.UI
 
         void OnStoreChanged(GraphChangedEventArgs args)
         {
+            if (!_storeDirty) _storeDirtyAt = EditorApplication.timeSinceStartup;
             _storeDirty = true;
-            _storeDirtyAt = EditorApplication.timeSinceStartup;
-            if (args.Cleared) _priorityRequested.Clear();
+            if (args.Cleared)
+            {
+                _pendingCleared = true;
+                _priorityRequested.Clear();
+            }
+            foreach (var o in args.ChangedOwners) _pendingOwners.Add(o);
+        }
+
+        /// <summary>変化した owner が表示・ハイライト中のノードに関係するか。</summary>
+        bool IsStoreChangeRelevant()
+        {
+            if (_pendingCleared) return true;
+            foreach (var r in Roots)
+                if (!Highlight.ContainsNode(r) && Store.ContainsNode(r)) return true; // 解析待ちだったルートが索引された
+            if (Visible.Count == 0 && Highlight.NodeDepth.Count == 0) return false;
+            foreach (var key in _pendingOwners)
+            {
+                var rec = Store.GetOwner(key);
+                if (rec == null) return true; // 削除された owner（内容は不明なので反映する）
+                foreach (var n in rec.Nodes)
+                    if (Visible.Contains(n.Id) || Highlight.ContainsNode(n.Id)) return true;
+                foreach (var eid in rec.EdgeIds)
+                {
+                    var e = Store.GetEdge(eid);
+                    if (e == null) continue;
+                    if (Visible.Contains(e.SourceId) || Visible.Contains(e.TargetId) || Highlight.ContainsNode(e.SourceId) || Highlight.ContainsNode(e.TargetId)) return true;
+                }
+            }
+            return false;
         }
 
         void ApplyStoreChange()
         {
             _storeDirty = false;
+            bool relevant = IsStoreChangeRelevant();
+            _pendingOwners.Clear();
+            _pendingCleared = false;
+            if (!relevant)
+            {
+                // 表示中の部分グラフに関係しない更新（バックグラウンド索引など）は再計算・再描画しない
+                Changed?.Invoke(ViewChange.Store);
+                return;
+            }
             int removed = Visible.RemoveWhere(id => !Store.ContainsNode(id));
             Pinned.RemoveWhere(id => !Store.ContainsNode(id));
             bool hadRoots = Roots.Count > 0;
@@ -505,7 +582,7 @@ namespace UnityNetworkViewer.Editor.UI
             }
             CleanupAfterVisibleChange();
             if (changed) RequestLayout(State.focusSelection);
-            Bump(true);
+            Bump(ViewChange.Structure | ViewChange.Selection | ViewChange.Store);
         }
 
         // ------------------------------------------------------------------ Layout
@@ -527,8 +604,9 @@ namespace UnityNetworkViewer.Editor.UI
 
         void Update()
         {
-            // 索引更新は少し間引いて反映する（大量コミット中の再描画を抑える）
-            if (_storeDirty && EditorApplication.timeSinceStartup - _storeDirtyAt > 0.15) ApplyStoreChange();
+            // 索引更新は間引いて反映する（バックグラウンド索引中は 1 秒ごと）
+            double interval = _service.IsBusy ? 1.0 : 0.15;
+            if (_storeDirty && EditorApplication.timeSinceStartup - _storeDirtyAt > interval) ApplyStoreChange();
 
             if (_layoutTask != null && _layoutTask.IsCompleted)
             {
@@ -544,7 +622,7 @@ namespace UnityNetworkViewer.Editor.UI
         void StartLayout()
         {
             _layoutPending = false;
-            var ids = GetDrawnNodes();
+            var ids = new List<string>(GetDrawnNodes());
             var input = new LayoutInput
             {
                 NodeWidth = GraphStyles.NodeWidth,
@@ -597,7 +675,8 @@ namespace UnityNetworkViewer.Editor.UI
             }
             Groups.Clear();
             Groups.AddRange(result.Groups);
-            Bump(false);
+            PositionsRevision++;
+            Changed?.Invoke(ViewChange.Positions);
             LayoutApplied?.Invoke();
             if (_focusAfterLayout)
             {

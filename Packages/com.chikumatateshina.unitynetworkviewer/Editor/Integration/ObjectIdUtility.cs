@@ -16,6 +16,88 @@ namespace UnityNetworkViewer.Editor
     /// - 未保存・Prefab Stage 等: session-scoped な ses1:{instanceId}
     /// GlobalObjectId は Scene 移動・再生成で変わり得るため絶対不変としては扱わない。
     /// </summary>
+    /// <summary>
+    /// 作成後まだ保存されていないオブジェクト。これらに GlobalObjectId を求めると Unity が Scene 全体の
+    /// ファイル ID を割り当て直す（大きな Scene では数百 ms 以上）ため、保存されるまで一時 ID（ses1:）で扱う。
+    /// 保存後に一時 ID を含むチャンクを再解析して永続 ID に置き換える。
+    /// </summary>
+    public static class NewObjectRegistry
+    {
+        sealed class PerScene
+        {
+            public readonly HashSet<int> GameObjects = new HashSet<int>();
+            public readonly HashSet<int> ComponentHosts = new HashSet<int>();
+        }
+
+        static readonly Dictionary<int, PerScene> Scenes = new Dictionary<int, PerScene>();
+
+        static PerScene For(Scene scene, bool create)
+        {
+            if (!scene.IsValid()) return null;
+            if (!Scenes.TryGetValue(scene.handle, out var s) && create)
+            {
+                s = new PerScene();
+                Scenes[scene.handle] = s;
+            }
+            return s;
+        }
+
+        /// <summary>作成された GameObject（子孫を含む）を登録する。</summary>
+        public static void MarkCreated(GameObject root)
+        {
+            if (root == null) return;
+            var s = For(root.scene, true);
+            if (s == null) return;
+            var stack = new Stack<Transform>();
+            stack.Push(root.transform);
+            while (stack.Count > 0)
+            {
+                var t = stack.Pop();
+                s.GameObjects.Add(t.gameObject.GetInstanceID());
+                for (int i = 0; i < t.childCount; i++) stack.Push(t.GetChild(i));
+            }
+        }
+
+        /// <summary>Component が追加された GameObject を登録する（既知の Component 以外は一時 ID になる）。</summary>
+        public static void MarkComponentsChanged(GameObject go)
+        {
+            if (go == null) return;
+            For(go.scene, true)?.ComponentHosts.Add(go.GetInstanceID());
+        }
+
+        public static bool IsNew(GameObject go)
+        {
+            if (go == null || Scenes.Count == 0) return false;
+            var s = For(go.scene, false);
+            return s != null && s.GameObjects.Contains(go.GetInstanceID());
+        }
+
+        public static bool HasNewComponents(GameObject go)
+        {
+            if (go == null || Scenes.Count == 0) return false;
+            var s = For(go.scene, false);
+            return s != null && (s.ComponentHosts.Contains(go.GetInstanceID()) || s.GameObjects.Contains(go.GetInstanceID()));
+        }
+
+        /// <summary>Scene の保存・クローズ時。以後は永続 ID を使う。</summary>
+        public static void ClearScene(Scene scene)
+        {
+            if (scene.IsValid()) Scenes.Remove(scene.handle);
+        }
+
+        public static void Clear() => Scenes.Clear();
+
+        /// <summary>新規オブジェクト（またはその Component）か。</summary>
+        public static bool IsNewObject(Object obj)
+        {
+            GameObject go = obj as GameObject ?? (obj as Component)?.gameObject;
+            if (go == null) return false;
+            // 未保存の Scene のオブジェクトは常に一時 ID（GlobalObjectId を求めない）
+            if (string.IsNullOrEmpty(go.scene.path) && go.scene.IsValid() && !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(go.scene)) return true;
+            return Scenes.Count > 0 && IsNew(go);
+        }
+    }
+
     public static class ObjectIdUtility
     {
         public static string GetSceneGuid(Scene scene)
@@ -41,6 +123,7 @@ namespace UnityNetworkViewer.Editor
                 return NodeIds.Scene(AssetDatabase.AssetPathToGUID(path));
             }
             if (EditorUtility.IsPersistent(obj)) return GetAssetObjectId(obj);
+            if (NewObjectRegistry.IsNewObject(obj)) return NodeIds.SessionObject(obj.GetInstanceID());
             var gid = GlobalObjectId.GetGlobalObjectIdSlow(obj);
             return FromGlobalId(obj, gid);
         }
@@ -66,6 +149,7 @@ namespace UnityNetworkViewer.Editor
                 var o = objects[i];
                 if (o == null) continue;
                 if (EditorUtility.IsPersistent(o)) result[i] = GetAssetObjectId(o);
+                else if (NewObjectRegistry.IsNewObject(o)) result[i] = NodeIds.SessionObject(o.GetInstanceID());
                 else sceneIndices.Add(i);
             }
             if (sceneIndices.Count > 0)

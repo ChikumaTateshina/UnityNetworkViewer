@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using UnityNetworkViewer.Core;
 using UnityNetworkViewer.Core.Yaml;
 using UnityEditor;
@@ -13,9 +14,22 @@ namespace UnityNetworkViewer.Editor
     /// ノードIDはロード済み解析（GlobalObjectId）と一致する形式で生成し、Scene を開いた時点で
     /// ロード済み Provider の結果に置き換わる。
     /// 制約: バイナリ形式は依存情報のみ。Prefab Instance 内部の参照は Prefab Asset の値＋Override から推定する。
+    /// 準備段階（<see cref="Prepare"/>）でファイルの読み込みと構文解析をワーカースレッドで行い、
+    /// 参照される Prefab の構造をフレームごとに少しずつ構築してから、本解析を行う。
     /// </summary>
-    public sealed class UnloadedSceneProvider : IAnalysisProvider, IAssetDiscoveryProvider
+    public sealed class UnloadedSceneProvider : IAnalysisProvider, IAssetDiscoveryProvider, IPreparedAnalysisProvider
     {
+        sealed class Preparation
+        {
+            public string Path;
+            public Task<UnityYamlDocument> Parse;
+            public UnityYamlDocument Doc;
+            public List<string> PrefabGuids;
+            public int Next;
+        }
+
+        static readonly Dictionary<string, Preparation> Preparations = new Dictionary<string, Preparation>(StringComparer.Ordinal);
+
         public string Id => ProviderIds.UnloadedScene;
         public int Version => 1;
         public int Order => 0;
@@ -47,6 +61,71 @@ namespace UnityNetworkViewer.Editor
         public bool CanAnalyze(AnalysisTarget target)
             => target.Kind == AnalysisTargetKind.UnloadedScene && UnvSettings.instance.unloadedSceneMode != UnloadedSceneMode.Disabled;
 
+        public bool Prepare(AnalysisTarget target, AnalysisContext context)
+        {
+            if (!Preparations.TryGetValue(target.Key, out var prep) || prep.Path != target.Path)
+            {
+                string full = Path.GetFullPath(target.Path);
+                // 構文解析は Unity API を使わないためワーカースレッドで行う
+                prep = new Preparation { Path = target.Path, Parse = Task.Run(() => UnityYamlParser.ParseFile(full)) };
+                Preparations[target.Key] = prep;
+                return false;
+            }
+            if (prep.Doc == null)
+            {
+                if (!prep.Parse.IsCompleted) return false;
+                if (prep.Parse.IsFaulted || prep.Parse.IsCanceled) return true; // Analyze でエラーを記録する
+                prep.Doc = prep.Parse.Result;
+                prep.PrefabGuids = CollectPrefabGuids(prep.Doc);
+            }
+            // 参照される Prefab の構造を少しずつ構築する（1 件ずつ Prefab を読み込むため）
+            while (prep.Next < prep.PrefabGuids.Count)
+            {
+                if (context.OutOfTime) return false;
+                context.PrefabStructures.Get(prep.PrefabGuids[prep.Next++], context.Settings);
+            }
+            return true;
+        }
+
+        static List<string> CollectPrefabGuids(UnityYamlDocument doc)
+        {
+            var guids = new HashSet<string>(StringComparer.Ordinal);
+            if (doc.IsText)
+            {
+                foreach (var o in doc.Objects)
+                {
+                    foreach (var r in o.References)
+                        if (!string.IsNullOrEmpty(r.Guid)) guids.Add(r.Guid);
+                    foreach (var m in o.Modifications)
+                    {
+                        if (!string.IsNullOrEmpty(m.Target.Guid)) guids.Add(m.Target.Guid);
+                        if (!string.IsNullOrEmpty(m.ObjectReference.Guid)) guids.Add(m.ObjectReference.Guid);
+                    }
+                }
+            }
+            var list = new List<string>();
+            foreach (var g in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(g);
+                if (!string.IsNullOrEmpty(path) && path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)) list.Add(g);
+            }
+            return list;
+        }
+
+        static UnityYamlDocument TakeParsed(AnalysisTarget target)
+        {
+            if (!Preparations.TryGetValue(target.Key, out var prep)) return null;
+            Preparations.Remove(target.Key);
+            if (prep.Path != target.Path) return null;
+            if (prep.Doc != null) return prep.Doc;
+            if (prep.Parse.IsCompleted)
+            {
+                if (prep.Parse.IsFaulted) throw prep.Parse.Exception.GetBaseException();
+                return prep.Parse.Result;
+            }
+            return null;
+        }
+
         public AnalysisResult Analyze(AnalysisTarget target, AnalysisContext context)
         {
             var result = new AnalysisResult(Id);
@@ -68,7 +147,8 @@ namespace UnityNetworkViewer.Editor
             UnityYamlDocument doc;
             try
             {
-                doc = UnityYamlParser.ParseFile(target.Path);
+                // 準備済みならその結果を使う（Prepare を経ない呼び出しでは同期的に読む）
+                doc = TakeParsed(target) ?? UnityYamlParser.ParseFile(target.Path);
             }
             catch (Exception ex)
             {

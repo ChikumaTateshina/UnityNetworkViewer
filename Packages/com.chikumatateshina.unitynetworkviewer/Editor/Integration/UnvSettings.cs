@@ -30,6 +30,9 @@ namespace UnityNetworkViewer.Editor
         [Tooltip("1フレームあたりの解析時間予算 (ms)。")]
         public int frameBudgetMilliseconds = 12;
 
+        [Tooltip("ロード済み Scene を分割して解析する単位（GameObject 数）。小さいほど 1 フレームの処理が短くなる。")]
+        public int chunkSize = 64;
+
         public UnloadedSceneMode unloadedSceneMode = UnloadedSceneMode.TextIndexOnly;
 
         [Tooltip("索引をLibrary/以下にキャッシュし、再起動後に復元する。")]
@@ -66,18 +69,33 @@ namespace UnityNetworkViewer.Editor
 
         public void SaveSettings()
         {
+            _excludedNames = null;
             Save(true);
         }
+
+        [System.NonSerialized] string[] _excludedNames;
+        [System.NonSerialized] string[] _excludedSuffixes;
+        [System.NonSerialized] string[] _excludedPrefixes;
+        [System.NonSerialized] int _excludedSignature;
 
         public bool IsExcludedProperty(string propertyPath)
         {
             if (string.IsNullOrEmpty(propertyPath)) return false;
-            foreach (var name in excludedPropertyNames)
+            // 走査中に大量に呼ばれるため、比較用の文字列を事前に作っておく（設定の保存時に作り直す）
+            if (_excludedNames == null || _excludedSignature != excludedPropertyNames.Count)
             {
-                if (string.IsNullOrEmpty(name)) continue;
-                if (propertyPath == name ||
-                    propertyPath.EndsWith("." + name, System.StringComparison.Ordinal) ||
-                    propertyPath.StartsWith(name + ".", System.StringComparison.Ordinal))
+                int signature = excludedPropertyNames.Count;
+                var names = excludedPropertyNames.FindAll(n => !string.IsNullOrEmpty(n));
+                _excludedNames = names.ToArray();
+                _excludedSuffixes = names.ConvertAll(n => "." + n).ToArray();
+                _excludedPrefixes = names.ConvertAll(n => n + ".").ToArray();
+                _excludedSignature = signature;
+            }
+            for (int i = 0; i < _excludedNames.Length; i++)
+            {
+                if (propertyPath == _excludedNames[i] ||
+                    propertyPath.EndsWith(_excludedSuffixes[i], System.StringComparison.Ordinal) ||
+                    propertyPath.StartsWith(_excludedPrefixes[i], System.StringComparison.Ordinal))
                     return true;
             }
             return false;

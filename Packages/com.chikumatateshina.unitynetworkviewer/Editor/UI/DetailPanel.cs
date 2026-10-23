@@ -24,6 +24,10 @@ namespace UnityNetworkViewer.Editor.UI
         string _shownNode;
         long _shownRevision = -1;
         string _shownEdge;
+        double _shownAt;
+
+        /// <summary>方向ごとに一覧へ出す関係の上限（参照が非常に多い Asset でも固まらないように）。</summary>
+        const int MaxRowsPerDirection = 300;
 
         public Action<string> FocusNodeRequested;
         public Action<string> NavigateRequested;
@@ -124,11 +128,15 @@ namespace UnityNetworkViewer.Editor.UI
         {
             if (_vm == null) return;
             string id = _vm.GraphSelectedNodeId;
-            bool nodeChanged = force || id != _shownNode || _vm.Store.Revision != _shownRevision;
+            double now = EditorApplication.timeSinceStartup;
+            // 索引の更新による作り直しは 1 秒に 1 回まで（バックグラウンド索引中に毎回作り直さない）
+            bool storeChanged = _vm.Store.Revision != _shownRevision && now - _shownAt > 1.0;
+            bool nodeChanged = force || id != _shownNode || storeChanged;
             if (nodeChanged)
             {
                 _shownNode = id;
                 _shownRevision = _vm.Store.Revision;
+                _shownAt = now;
                 ShowNode(id);
             }
             if (force || nodeChanged || _shownEdge != _vm.SelectedEdgeId) ShowEdge(_vm.Store.GetEdge(_vm.SelectedEdgeId));
@@ -182,8 +190,17 @@ namespace UnityNetworkViewer.Editor.UI
 
         void AddEdgeRows(string id, bool outgoing)
         {
-            var edges = (outgoing ? _vm.Store.GetOutEdges(id) : _vm.Store.GetInEdges(id)).ToList();
-            _rows.Add(new Row { Header = true, Text = (outgoing ? "▶ 参照先 / 子 (Outgoing) " : "◀ 参照元 / 親 (Incoming) ") + edges.Count });
+            // 件数は全件数えるが、行は上限まで（数千〜数万の参照を持つ Asset で固まらないように）
+            int total = outgoing ? _vm.Store.GetOutEdgeIds(id).Count : _vm.Store.GetInEdgeIds(id).Count;
+            var edges = new List<GraphEdge>(Math.Min(total, MaxRowsPerDirection));
+            foreach (var e in outgoing ? _vm.Store.GetOutEdges(id) : _vm.Store.GetInEdges(id))
+            {
+                if (edges.Count >= MaxRowsPerDirection) break;
+                edges.Add(e);
+            }
+            _rows.Add(new Row { Header = true, Text = (outgoing ? "▶ 参照先 / 子 (Outgoing) " : "◀ 参照元 / 親 (Incoming) ") + total });
+            if (total > edges.Count)
+                _rows.Add(new Row { Header = true, Text = $"<color=#999>（先頭 {edges.Count} 件を表示。全件はグラフの「隣接ノードを展開」やエクスポートで確認できます）</color>" });
             foreach (var group in edges.GroupBy(e => e.Kind).OrderBy(g => g.Key))
             {
                 foreach (var e in group.OrderBy(x => x.PropertyPath ?? x.MemberName ?? ""))

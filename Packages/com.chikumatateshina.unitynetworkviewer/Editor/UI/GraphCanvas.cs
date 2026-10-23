@@ -10,6 +10,8 @@ namespace UnityNetworkViewer.Editor.UI
     /// <summary>
     /// グラフ描画キャンバス。ノード/エッジは generateVisualContent で一括描画し、VisualElement はラベル
     /// （可視範囲内のノードのみ・プール再利用）に限定する。パン/ズーム/ドラッグ/クリック/コンテキストメニュー。
+    /// 描画内容は「生成時のパン/ズーム」で作り、パン操作中は層の移動（transform）だけで追従する。
+    /// 表示範囲が生成範囲（画面の周囲に余白を含む）を外れたとき、内容が変わったとき、ズームが止まったときだけ作り直す。
     /// </summary>
     public sealed class GraphCanvas : VisualElement
     {
@@ -19,6 +21,7 @@ namespace UnityNetworkViewer.Editor.UI
         public const float MinZoom = 0.08f;
         public const float MaxZoom = 3f;
 
+        readonly VisualElement _contentLayer;
         readonly VisualElement _labelLayer;
         readonly List<Label> _nodeLabels = new List<Label>();
         readonly List<Label> _edgeLabels = new List<Label>();
@@ -41,6 +44,17 @@ namespace UnityNetworkViewer.Editor.UI
 
         // 描画用キャッシュ（ViewRevision 単位）
         long _visualRevision = -1;
+
+        // 生成時のパン/ズームと内容のリビジョン
+        Vector2 _genPan;
+        float _genZoom = 1f;
+        long _genViewRevision = -1;
+        long _genPositionsRevision = -1;
+        Vector2 _genSize;
+        bool _zoomGesture;
+        IVisualElementScheduledItem _zoomSettle;
+        /// <summary>生成範囲の余白（画面サイズに対する割合）。</summary>
+        const float GenerateMargin = 0.5f;
         readonly Dictionary<string, EdgeRole> _nodeRole = new Dictionary<string, EdgeRole>(StringComparer.Ordinal);
 
         public bool IsInteracting => _dragging || _panning;
@@ -62,12 +76,10 @@ namespace UnityNetworkViewer.Editor.UI
             focusable = true;
             pickingMode = PickingMode.Position;
 
-            _labelLayer = new VisualElement { name = "labels", pickingMode = PickingMode.Ignore };
-            _labelLayer.style.position = Position.Absolute;
-            _labelLayer.style.left = 0;
-            _labelLayer.style.top = 0;
-            _labelLayer.style.right = 0;
-            _labelLayer.style.bottom = 0;
+            _contentLayer = CreateLayer("content");
+            _contentLayer.generateVisualContent += Draw;
+            Add(_contentLayer);
+            _labelLayer = CreateLayer("labels");
             Add(_labelLayer);
 
             _banner = new Label { pickingMode = PickingMode.Ignore };
@@ -94,7 +106,7 @@ namespace UnityNetworkViewer.Editor.UI
             Legend = new LegendElement();
             Add(Legend);
 
-            generateVisualContent += Draw;
+            generateVisualContent += DrawBackground;
             RegisterCallback<PointerDownEvent>(OnPointerDown);
             RegisterCallback<PointerMoveEvent>(OnPointerMove);
             RegisterCallback<PointerUpEvent>(OnPointerUp);
@@ -102,6 +114,18 @@ namespace UnityNetworkViewer.Editor.UI
             RegisterCallback<WheelEvent>(OnWheel);
             RegisterCallback<KeyDownEvent>(OnKeyDown);
             RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
+        }
+
+        static VisualElement CreateLayer(string name)
+        {
+            var layer = new VisualElement { name = name, pickingMode = PickingMode.Ignore };
+            layer.style.position = Position.Absolute;
+            layer.style.left = 0;
+            layer.style.top = 0;
+            layer.style.right = 0;
+            layer.style.bottom = 0;
+            layer.style.transformOrigin = new TransformOrigin(0, 0, 0);
+            return layer;
         }
 
         public void Bind(GraphViewModel vm)
@@ -135,11 +159,65 @@ namespace UnityNetworkViewer.Editor.UI
             }
         }
 
+        /// <summary>
+        /// 表示を更新する。内容・位置・ズームが変わったか、生成範囲を外れたときだけ描画を作り直し、
+        /// それ以外（パン）は層の移動だけで済ませる。
+        /// </summary>
         public void Refresh()
         {
-            MarkDirtyRepaint();
+            MarkDirtyRepaint(); // 背景グリッド（軽量）
+            bool contentChanged = _vm == null || _genViewRevision != _vm.ViewRevision || _genPositionsRevision != _vm.PositionsRevision;
+            bool zoomChanged = !Mathf.Approximately(_genZoom, Zoom);
+            var size = contentRect.size;
+            var delta = Pan - _genPan;
+            bool outOfRange = Mathf.Abs(delta.x) > size.x * GenerateMargin * 0.9f || Mathf.Abs(delta.y) > size.y * GenerateMargin * 0.9f;
+            bool resized = size != _genSize;
+            if (contentChanged || outOfRange || resized || (zoomChanged && !_zoomGesture)) Regenerate();
+            else ApplyLayerTransform();
+            MiniMap.OnViewChanged(contentChanged);
+        }
+
+        void Regenerate()
+        {
+            _genPan = Pan;
+            _genZoom = Zoom;
+            _genSize = contentRect.size;
+            if (_vm != null)
+            {
+                _genViewRevision = _vm.ViewRevision;
+                _genPositionsRevision = _vm.PositionsRevision;
+            }
+            ApplyLayerTransform();
+            _contentLayer.MarkDirtyRepaint();
             SyncLabels();
-            MiniMap.MarkDirtyRepaint();
+        }
+
+        /// <summary>生成時のパン/ズームから現在のパン/ズームへの変換を層に設定する。</summary>
+        void ApplyLayerTransform()
+        {
+            float k = _genZoom <= 0 ? 1f : Zoom / _genZoom;
+            var t = Pan - _genPan * k;
+            var translate = new StyleTranslate(new Translate(t.x, t.y, 0));
+            var scale = new StyleScale(new Scale(new Vector3(k, k, 1f)));
+            _contentLayer.style.translate = translate;
+            _contentLayer.style.scale = scale;
+            _labelLayer.style.translate = translate;
+            _labelLayer.style.scale = scale;
+        }
+
+        Vector2 GenToScreen(Vector2 w) => w * _genZoom + _genPan;
+
+        /// <summary>生成範囲（画面＋余白）のワールド座標。</summary>
+        Rect GeneratedWorldRect
+        {
+            get
+            {
+                var size = _genSize;
+                var margin = size * GenerateMargin;
+                var min = (-margin - _genPan) / _genZoom;
+                var max = (size + margin - _genPan) / _genZoom;
+                return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+            }
         }
 
         public void SetBanner(string text)
@@ -290,15 +368,21 @@ namespace UnityNetworkViewer.Editor.UI
             public override int GetHashCode() => Color.GetHashCode() ^ Width.GetHashCode();
         }
 
+        void DrawBackground(MeshGenerationContext mgc)
+        {
+            DrawGrid(mgc.painter2D, contentRect);
+        }
+
+        /// <summary>ノード・エッジ・グループ。生成時のパン/ズーム（_genPan/_genZoom）の画面座標で描く。</summary>
         void Draw(MeshGenerationContext mgc)
         {
             var p = mgc.painter2D;
-            var rect = contentRect;
-            DrawGrid(p, rect);
             if (_vm == null) return;
             EnsureVisualCache();
+            float Zoom = _genZoom; // 以降の描画は生成時のズームで行う
+            Func<Vector2, Vector2> WorldToScreen = GenToScreen;
 
-            var view = WorldViewport;
+            var view = GeneratedWorldRect;
             var margin = new Vector2(GraphStyles.NodeWidth, GraphStyles.NodeHeight);
             var cull = Rect.MinMaxRect(view.xMin - margin.x, view.yMin - margin.y, view.xMax + margin.x, view.yMax + margin.y);
 
@@ -403,7 +487,7 @@ namespace UnityNetworkViewer.Editor.UI
 
             // ノード
             float radius = 5f * Zoom;
-            var drawn = _vm.GetDrawnNodes();
+            var drawn = new List<string>(_vm.GetDrawnNodes());
             // 強調ノードを最後に描く
             drawn.Sort((a, b) => _vm.Highlight.ContainsNode(a).CompareTo(_vm.Highlight.ContainsNode(b)));
             foreach (var id in drawn)
@@ -613,10 +697,12 @@ namespace UnityNetworkViewer.Editor.UI
         {
             if (_vm == null) return;
             EnsureVisualCache();
+            float Zoom = _genZoom; // ラベルも生成時のパン/ズームで配置し、層の移動で追従する
+            Func<Vector2, Vector2> WorldToScreen = GenToScreen;
             int used = 0;
             int usedEdges = 0;
             int usedGroups = 0;
-            var view = WorldViewport;
+            var view = GeneratedWorldRect;
             var half = new Vector2(GraphStyles.NodeWidth, GraphStyles.NodeHeight) * 0.5f;
 
             if (Zoom >= 0.42f)
@@ -882,6 +968,15 @@ namespace UnityNetworkViewer.Editor.UI
             var world = ScreenToWorld(pos);
             Zoom = newZoom;
             Pan = pos - world * Zoom;
+            // ホイール操作中は拡大縮小の変換だけで追従し、止まってから描き直す
+            _zoomGesture = true;
+            if (_zoomSettle == null)
+                _zoomSettle = schedule.Execute(() =>
+                {
+                    _zoomGesture = false;
+                    Refresh();
+                });
+            _zoomSettle.ExecuteLater(150);
             Refresh();
             ViewChanged?.Invoke();
             evt.StopPropagation();
@@ -920,10 +1015,17 @@ namespace UnityNetworkViewer.Editor.UI
         float _scale = 1f;
         Vector2 _offset;
         bool _dragging;
+        readonly VisualElement _viewRect;
 
         public MiniMapElement(GraphCanvas canvas)
         {
             _canvas = canvas;
+            // 表示範囲の枠は子要素の位置だけで動かす（パンのたびにノードを描き直さない）
+            _viewRect = new VisualElement { pickingMode = PickingMode.Ignore };
+            _viewRect.style.position = Position.Absolute;
+            _viewRect.style.borderTopWidth = _viewRect.style.borderBottomWidth = _viewRect.style.borderLeftWidth = _viewRect.style.borderRightWidth = 1;
+            _viewRect.style.borderTopColor = _viewRect.style.borderBottomColor = _viewRect.style.borderLeftColor = _viewRect.style.borderRightColor = new Color(1, 1, 1, 0.7f);
+            Add(_viewRect);
             style.position = Position.Absolute;
             style.right = 8;
             style.bottom = 8;
@@ -940,6 +1042,33 @@ namespace UnityNetworkViewer.Editor.UI
         }
 
         public void Bind(GraphViewModel vm) => _vm = vm;
+
+        /// <summary>キャンバスの表示が変わった。内容が変わったときだけノードを描き直す。</summary>
+        public void OnViewChanged(bool contentChanged)
+        {
+            if (contentChanged || _scale <= 0) MarkDirtyRepaint();
+            UpdateViewRect();
+        }
+
+        void UpdateViewRect()
+        {
+            var view = _canvas.WorldViewport;
+            var size = contentRect.size;
+            var vmin = (view.min - _worldBounds.min) * _scale + _offset;
+            var vmax = (view.max - _worldBounds.min) * _scale + _offset;
+            vmin = Vector2.Max(vmin, Vector2.zero);
+            vmax = Vector2.Min(vmax, size);
+            if (vmax.x <= vmin.x || vmax.y <= vmin.y)
+            {
+                _viewRect.style.display = DisplayStyle.None;
+                return;
+            }
+            _viewRect.style.display = DisplayStyle.Flex;
+            _viewRect.style.left = vmin.x;
+            _viewRect.style.top = vmin.y;
+            _viewRect.style.width = vmax.x - vmin.x;
+            _viewRect.style.height = vmax.y - vmin.y;
+        }
 
         void MoveTo(Vector2 local)
         {
@@ -961,10 +1090,9 @@ namespace UnityNetworkViewer.Editor.UI
                 minY = Mathf.Min(minY, p.y); maxY = Mathf.Max(maxY, p.y);
             }
             if (minX > maxX) return;
-            var view = _canvas.WorldViewport;
-            minX = Mathf.Min(minX, view.xMin); minY = Mathf.Min(minY, view.yMin);
-            maxX = Mathf.Max(maxX, view.xMax); maxY = Mathf.Max(maxY, view.yMax);
-            _worldBounds = Rect.MinMaxRect(minX, minY, maxX, maxY);
+            // 範囲はノードのみ（表示範囲を含めるとパンのたびに縮尺が変わり描き直しが必要になる）
+            float pad = GraphStyles.NodeWidth;
+            _worldBounds = Rect.MinMaxRect(minX - pad, minY - pad, maxX + pad, maxY + pad);
             var size = contentRect.size - new Vector2(8, 8);
             _scale = Mathf.Min(size.x / Mathf.Max(_worldBounds.width, 1f), size.y / Mathf.Max(_worldBounds.height, 1f));
             _offset = new Vector2(4, 4) + (size - _worldBounds.size * _scale) * 0.5f;
@@ -984,17 +1112,7 @@ namespace UnityNetworkViewer.Editor.UI
                 p2.ClosePath();
                 p2.Fill();
             }
-            var vmin = (view.min - _worldBounds.min) * _scale + _offset;
-            var vmax = (view.max - _worldBounds.min) * _scale + _offset;
-            p2.strokeColor = new Color(1, 1, 1, 0.7f);
-            p2.lineWidth = 1f;
-            p2.BeginPath();
-            p2.MoveTo(vmin);
-            p2.LineTo(new Vector2(vmax.x, vmin.y));
-            p2.LineTo(vmax);
-            p2.LineTo(new Vector2(vmin.x, vmax.y));
-            p2.ClosePath();
-            p2.Stroke();
+            UpdateViewRect();
         }
     }
 

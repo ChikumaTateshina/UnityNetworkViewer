@@ -156,7 +156,10 @@ namespace UnityNetworkViewer.Editor.UI
             var budget = new IntegerField("フレーム予算 (ms)") { value = st.frameBudgetMilliseconds };
             budget.RegisterValueChangedCallback(e => { st.frameBudgetMilliseconds = Mathf.Clamp(e.newValue, 2, 200); st.SaveSettings(); });
             settings.Add(budget);
-            var note = new HelpBox("索引設定の一部（Packages/、Udon 解析）は全体再解析後に反映されます。", HelpBoxMessageType.Info);
+            var chunk = new IntegerField("チャンク (GameObject 数)") { value = st.chunkSize, tooltip = "ロード済み Scene を分割して解析する単位。小さいほど 1 フレームの処理が短く、大きいほど全体の解析が速くなります。" };
+            chunk.RegisterValueChangedCallback(e => { st.chunkSize = Mathf.Clamp(e.newValue, 16, 4096); st.SaveSettings(); });
+            settings.Add(chunk);
+            var note = new HelpBox("索引設定の一部（Packages/、Udon 解析、チャンク）は全体再解析後に反映されます。", HelpBoxMessageType.Info);
             settings.Add(note);
         }
 

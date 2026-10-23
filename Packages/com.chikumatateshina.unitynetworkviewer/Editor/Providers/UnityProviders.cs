@@ -10,7 +10,7 @@ namespace UnityNetworkViewer.Editor
     internal static class TargetFilters
     {
         public static bool IsHierarchyTarget(AnalysisTarget t)
-            => t.Kind == AnalysisTargetKind.LoadedScene ||
+            => t.Kind == AnalysisTargetKind.LoadedScene || t.Kind == AnalysisTargetKind.SceneChunk ||
                (t.Kind == AnalysisTargetKind.Asset && HasExtension(t.Path, ".prefab"));
 
         public static bool HasExtension(string path, string ext)
@@ -37,23 +37,8 @@ namespace UnityNetworkViewer.Editor
                 return result;
             }
 
-            if (!table.IsPrefabAsset)
-            {
-                var scene = target.GetScene();
-                var sceneNode = new GraphNode
-                {
-                    Id = table.ContainerId,
-                    Kind = NodeKind.Scene,
-                    Name = string.IsNullOrEmpty(scene.name) ? "(Untitled)" : scene.name,
-                    TypeName = "Scene",
-                    SceneGuid = table.SceneGuid,
-                    AssetGuid = table.SceneGuid,
-                    AssetPath = scene.path,
-                    ProviderId = Id,
-                };
-                if (table.SceneGuid == null) sceneNode.Flags |= NodeFlags.Transient;
-                result.AddNode(sceneNode);
-            }
+            // Scene ノードは Scene 全体の解析でのみ出す（チャンク解析では Scheduler が別 owner として出す）
+            if (!table.IsPrefabAsset && !table.IsChunk) result.AddNode(CreateSceneNode(target.GetScene(), Id));
 
             for (int i = 0; i < table.GameObjects.Count; i++)
             {
@@ -116,6 +101,25 @@ namespace UnityNetworkViewer.Editor
             }
             return result;
         }
+
+        /// <summary>ロード済み Scene のノード。</summary>
+        public static GraphNode CreateSceneNode(UnityEngine.SceneManagement.Scene scene, string providerId)
+        {
+            string guid = ObjectIdUtility.GetSceneGuid(scene);
+            var node = new GraphNode
+            {
+                Id = ObjectIdUtility.GetSceneNodeId(scene),
+                Kind = NodeKind.Scene,
+                Name = string.IsNullOrEmpty(scene.name) ? "(Untitled)" : scene.name,
+                TypeName = "Scene",
+                SceneGuid = guid,
+                AssetGuid = guid,
+                AssetPath = scene.path,
+                ProviderId = providerId,
+            };
+            if (guid == null) node.Flags |= NodeFlags.Transient;
+            return node;
+        }
     }
 
     /// <summary>Component の SerializedProperty から ObjectReference / UnityEvent PersistentCall を抽出する。</summary>
@@ -133,11 +137,13 @@ namespace UnityNetworkViewer.Editor
             var table = context.GetTable(target);
             if (!table.IsValid) return result;
 
-            var refs = new List<SerializedReferenceInfo>();
+            // 1) 走査 2) 参照先の ID をまとめて計算（チャンク外の参照を 1 件ずつ計算しない） 3) 出力
+            var scanned = new List<(Component c, List<SerializedReferenceInfo> refs)>();
+            var targets = new List<UnityEngine.Object>();
             foreach (var c in table.Components)
             {
                 if (c == null || SerializedReferenceScanner.ShouldSkipObject(c)) continue;
-                refs.Clear();
+                var refs = new List<SerializedReferenceInfo>();
                 try
                 {
                     SerializedReferenceScanner.Scan(c, context.Settings, refs, out bool truncated);
@@ -153,7 +159,13 @@ namespace UnityNetworkViewer.Editor
                     continue;
                 }
                 if (refs.Count == 0) continue;
+                scanned.Add((c, refs));
+                foreach (var r in refs) if (r.Target != null) targets.Add(r.Target);
+            }
+            table.PrimeIds(targets);
 
+            foreach (var (c, refs) in scanned)
+            {
                 string sourceId = table.IdOf(c);
                 if (!result.ContainsNode(sourceId)) result.AddNode(table.CreateComponentNode(c, Id));
                 SerializedReferenceScanner.EmitEdges(result, table, c, sourceId, refs, Id);

@@ -12,6 +12,20 @@ namespace UnityNetworkViewer.Core
         public AnalysisResult Result;
     }
 
+    /// <summary>
+    /// 保存用の owner の浅いコピー。メインスレッドで作成し、書き出しはワーカースレッドで行える
+    /// （コミット済みのノード/エッジは以後変更されないため、参照の配列だけを複製する）。
+    /// </summary>
+    public sealed class OwnerSnapshot
+    {
+        public string Key;
+        public OwnerMetadata Metadata;
+        public GraphNode[] Nodes;
+        public GraphEdge[] Edges;
+        public AnalysisDiagnostic[] Diagnostics;
+        public string[] DependencyKeys;
+    }
+
     public sealed class GraphCacheHeader
     {
         public int SchemaVersion;
@@ -34,7 +48,39 @@ namespace UnityNetworkViewer.Core
         const uint Magic = 0x3145524F; // "ORE1"
         public const int FormatVersion = 2;
 
+        public static List<OwnerSnapshot> CreateSnapshots(GraphStore store, Func<OwnerRecord, bool> filter)
+        {
+            var list = new List<OwnerSnapshot>();
+            foreach (var o in store.Owners)
+            {
+                if (filter != null && !filter(o)) continue;
+                var edges = new List<GraphEdge>(o.EdgeIds.Count);
+                foreach (var id in o.EdgeIds)
+                {
+                    var e = store.GetEdge(id);
+                    if (e != null) edges.Add(e);
+                }
+                var deps = new string[o.DependencyKeys.Count];
+                o.DependencyKeys.CopyTo(deps);
+                list.Add(new OwnerSnapshot
+                {
+                    Key = o.Key,
+                    Metadata = (o.Metadata ?? new OwnerMetadata()).Clone(),
+                    Nodes = o.Nodes.ToArray(),
+                    Edges = edges.ToArray(),
+                    Diagnostics = o.Diagnostics.ToArray(),
+                    DependencyKeys = deps,
+                });
+            }
+            return list;
+        }
+
         public static void Write(Stream stream, GraphCacheHeader header, GraphStore store, Func<OwnerRecord, bool> filter)
+        {
+            Write(stream, header, CreateSnapshots(store, filter));
+        }
+
+        public static void Write(Stream stream, GraphCacheHeader header, IReadOnlyList<OwnerSnapshot> owners)
         {
             using (var w = new BinaryWriter(stream, Encoding.UTF8, true))
             {
@@ -48,8 +94,6 @@ namespace UnityNetworkViewer.Core
                     WriteString(w, kv.Value);
                 }
 
-                var owners = new List<OwnerRecord>();
-                foreach (var o in store.Owners) if (filter == null || filter(o)) owners.Add(o);
                 w.Write(owners.Count);
                 foreach (var o in owners)
                 {
@@ -62,22 +106,16 @@ namespace UnityNetworkViewer.Core
                     w.Write(m.AnalyzedAtUtcTicks);
                     w.Write(m.Persistent);
 
-                    w.Write(o.Nodes.Count);
+                    w.Write(o.Nodes.Length);
                     foreach (var n in o.Nodes) WriteNode(w, n);
 
-                    var edges = new List<GraphEdge>();
-                    foreach (var id in o.EdgeIds)
-                    {
-                        var e = store.GetEdge(id);
-                        if (e != null) edges.Add(e);
-                    }
-                    w.Write(edges.Count);
-                    foreach (var e in edges) WriteEdge(w, e);
+                    w.Write(o.Edges.Length);
+                    foreach (var e in o.Edges) WriteEdge(w, e);
 
-                    w.Write(o.Diagnostics.Count);
+                    w.Write(o.Diagnostics.Length);
                     foreach (var d in o.Diagnostics) WriteDiagnostic(w, d);
 
-                    w.Write(o.DependencyKeys.Count);
+                    w.Write(o.DependencyKeys.Length);
                     foreach (var k in o.DependencyKeys) WriteString(w, k);
                 }
                 w.Write(Magic);

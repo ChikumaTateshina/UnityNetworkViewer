@@ -33,6 +33,8 @@ namespace UnityNetworkViewer.Editor.UI
         ToolbarButton _cancelButton;
         double _nextStatusUpdate;
         bool _uiBuilt;
+        IVisualElementScheduledItem _searchTimer;
+        string _pendingSearch;
 
         [MenuItem("Window/Analysis/UnityNetworkViewer", priority = 2100)]
         [MenuItem("Tools/UnityNetworkViewer/Open Window")]
@@ -158,11 +160,18 @@ namespace UnityNetworkViewer.Editor.UI
             _search = new ToolbarSearchField { tooltip = "名前・型で検索。kind: type: scene: prefab: evidence: method: flag: edge: path: が使えます（例: type:Animator scene:Main）" };
             _search.style.flexGrow = 1;
             _search.style.minWidth = 160;
-            _search.RegisterValueChangedCallback(e => RunSearch(e.newValue));
+            // 入力のたびに全ノードを走査しないよう、入力が止まってから検索する
+            _search.RegisterValueChangedCallback(e =>
+            {
+                _pendingSearch = e.newValue;
+                if (_searchTimer == null) _searchTimer = _search.schedule.Execute(() => RunSearch(_pendingSearch));
+                _searchTimer.ExecuteLater(string.IsNullOrWhiteSpace(e.newValue) ? 0 : 200);
+            });
             _search.RegisterCallback<KeyDownEvent>(e =>
             {
                 if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
                 {
+                    if (_pendingSearch != null) RunSearch(_pendingSearch);
                     if (_searchItems.Count > 0) ShowSearchResultsInGraph();
                     e.StopPropagation();
                 }
@@ -290,6 +299,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         void RunSearch(string text)
         {
+            _pendingSearch = null;
             _searchItems.Clear();
             if (!string.IsNullOrWhiteSpace(text) && _vm != null) _searchItems.AddRange(_vm.Query.Search(text, 200));
             _searchResults.Rebuild();
@@ -396,14 +406,15 @@ namespace UnityNetworkViewer.Editor.UI
             _vm?.OnUnitySelection(sel.Ids);
         }
 
-        void OnViewChanged()
+        void OnViewChanged(ViewChange change)
         {
             if (!_uiBuilt) return;
-            _canvas.Refresh();
-            _detail.Refresh();
-            _bottom.Rebuild();
-            UpdateBanner();
-            SceneViewOverlay.Repaint();
+            // 変化の種類に応じて必要なものだけ更新する（ドラッグ中にパネルを作り直さない）
+            if ((change & (ViewChange.Positions | ViewChange.Selection | ViewChange.Structure)) != 0) _canvas.Refresh();
+            if ((change & (ViewChange.Selection | ViewChange.Structure | ViewChange.Store)) != 0) _detail.Refresh();
+            if ((change & ViewChange.Store) != 0) _bottom.RequestRebuild();
+            if (change != ViewChange.Positions) UpdateBanner();
+            if ((change & (ViewChange.Selection | ViewChange.Structure)) != 0) SceneViewOverlay.Repaint();
         }
 
         void OnFocusRequested(Vector2 world)
@@ -429,6 +440,7 @@ namespace UnityNetworkViewer.Editor.UI
             {
                 _nextStatusUpdate = EditorApplication.timeSinceStartup + 0.5;
                 UpdateStatus();
+                _bottom.Tick(_service != null && _service.IsBusy);
             }
         }
 
@@ -436,11 +448,12 @@ namespace UnityNetworkViewer.Editor.UI
         {
             if (_status == null || _service == null) return;
             var st = _service.Scheduler.Status;
-            string queue = st.Running ? $" | 解析中 {st.Completed}/{st.Total}" : "";
+            string queue = st.Running ? $" | 解析中 {st.Completed}/{st.Total}" : _service.IsBusy ? " | 準備中" : "";
             string layout = _vm != null && _vm.LayoutInProgress ? " | レイアウト計算中" : "";
             int drawn = _vm?.GetDrawnNodes().Count ?? 0;
             _status.text = $"ノード {_service.Store.NodeCount:N0} / エッジ {_service.Store.EdgeCount:N0} | 表示 {drawn}{queue}{layout}";
             _cancelButton?.SetEnabled(st.Running);
+            UpdateBanner();
         }
 
         void UpdateBanner()

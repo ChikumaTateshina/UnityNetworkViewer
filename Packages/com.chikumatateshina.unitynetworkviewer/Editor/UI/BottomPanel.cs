@@ -22,6 +22,11 @@ namespace UnityNetworkViewer.Editor.UI
         GraphDiagnosticReport _graphReport;
         bool _showLog;
         long _builtRevision = -1;
+        bool _rebuildRequested;
+        double _lastRebuild;
+
+        /// <summary>一覧に表示する診断の上限（全件はグラフ診断・エクスポートで確認できる）。</summary>
+        const int MaxItems = 5000;
 
         public Action<string> FocusNodeRequested;
 
@@ -120,23 +125,44 @@ namespace UnityNetworkViewer.Editor.UI
             _builtRevision = _vm.Store.Revision;
             _items.Clear();
             bool warnOnly = _warnOnly.value;
-            foreach (var d in _vm.Store.AllDiagnostics())
-                if (!warnOnly || d.Severity != DiagnosticSeverity.Info) _items.Add(d);
-            if (_graphReport != null)
-                foreach (var d in _graphReport.Items)
-                    if (!warnOnly || d.Severity != DiagnosticSeverity.Info) _items.Add(d);
-            _items.Sort((a, b) => b.Severity.CompareTo(a.Severity));
+            int errors = 0, warnings = 0, total = 0;
+            void Add(AnalysisDiagnostic d)
+            {
+                if (warnOnly && d.Severity == DiagnosticSeverity.Info) return;
+                total++;
+                if (d.Severity == DiagnosticSeverity.Error) errors++;
+                else if (d.Severity == DiagnosticSeverity.Warning) warnings++;
+                _items.Add(d);
+            }
+            foreach (var d in _vm.Store.AllDiagnostics()) Add(d);
+            if (_graphReport != null) foreach (var d in _graphReport.Items) Add(d);
+            // 重要度順（同順位は元の順）に並べ、上限で切る
+            var ordered = _items.OrderByDescending(d => d.Severity).Take(MaxItems).ToList();
+            _items.Clear();
+            _items.AddRange(ordered);
             _list.itemsSource = _items;
             _list.Rebuild();
-            int errors = _items.Count(d => d.Severity == DiagnosticSeverity.Error);
-            int warnings = _items.Count(d => d.Severity == DiagnosticSeverity.Warning);
-            _summary.text = $"エラー {errors} / 警告 {warnings} / 合計 {_items.Count}" +
+            _summary.text = $"エラー {errors} / 警告 {warnings} / 合計 {total}" + (total > _items.Count ? $"（先頭 {_items.Count} 件を表示）" : "") +
                             (_graphReport != null ? $"  （循環 {_graphReport.CycleCount}・孤立 {_graphReport.OrphanCount}・Missing {_graphReport.MissingReferenceCount}・未解決 {_graphReport.UnresolvedEdgeCount}）" : "");
         }
 
         public void OnLogAdded()
         {
-            if (_showLog) Rebuild(true);
+            if (_showLog) RequestRebuild();
+        }
+
+        /// <summary>索引の変化による再構築を要求する（実際の再構築は <see cref="Tick"/> で間引いて行う）。</summary>
+        public void RequestRebuild() => _rebuildRequested = true;
+
+        /// <summary>定期呼び出し。索引中は 3 秒に 1 回まで、索引が終わったらすぐ再構築する。</summary>
+        public void Tick(bool indexing)
+        {
+            if (!_rebuildRequested) return;
+            double now = UnityEditor.EditorApplication.timeSinceStartup;
+            if (indexing && now - _lastRebuild < 3.0) return;
+            _rebuildRequested = false;
+            _lastRebuild = now;
+            Rebuild();
         }
 
         static string Esc(string s) => string.IsNullOrEmpty(s) ? s : s.Replace("<", "<​");

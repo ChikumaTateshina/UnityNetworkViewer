@@ -43,16 +43,24 @@ namespace UnityNetworkViewer.Editor.UI
             var r = new ResolvedSelection();
             var objects = Selection.objects;
             // 大量選択時は先頭のみ解決する（選択反映の応答性を優先）
+            var mappedList = new List<Object>();
             for (int i = 0; i < objects.Length && i < MaxResolvedSelection; i++)
             {
                 var o = objects[i];
                 if (o == null) continue;
                 // Prefab Stage 内のオブジェクトは Prefab Asset 側の対応オブジェクトに読み替える
-                var mapped = MapPrefabStageObject(o);
-                string id = ObjectIdUtility.GetId(mapped);
-                if (id == null || r.Ids.Contains(id)) continue;
+                mappedList.Add(MapPrefabStageObject(o));
+            }
+            var mapped = mappedList.ToArray();
+            // SceneAsset はノードIDの形式が異なるため個別、それ以外はバッチで ID を求める
+            var ids = ObjectIdUtility.GetIds(mapped);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < mapped.Length; i++)
+            {
+                string id = mapped[i] is SceneAsset ? ObjectIdUtility.GetId(mapped[i]) : ids[i];
+                if (id == null || !seen.Add(id)) continue;
                 r.Ids.Add(id);
-                r.Objects.Add(mapped);
+                r.Objects.Add(mapped[i]);
             }
             return r;
         }

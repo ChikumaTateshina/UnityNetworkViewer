@@ -29,7 +29,7 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
    ```
    https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
    ```
-   （特定の版に固定する場合は末尾に `#v0.2.0` などを付けます）
+   （特定の版に固定する場合は末尾に `#v0.3.0` などを付けます）
 3. **手動**: Release の zip をプロジェクトの `Packages/com.chikumatateshina.unitynetworkviewer/` に展開
 
 ## 使い方
@@ -144,7 +144,11 @@ Provider の追加方法は [Documentation~/provider-contract.md](Documentation~
 - Animator のバインディングは Controller が使用する Clip のパスを Animator 階層で解決した**推定**です（状態遷移の到達性は考慮しません）。
 - Prefab Stage（Prefab Mode）内のオブジェクトは Prefab Asset 側の対応オブジェクトとして扱います（未保存の編集内容は保存後に反映）。
 - PNG エクスポート、Batch Mode 別プロセスによるオフライン索引は未実装です。
-- 性能目標（10 万ノード / 50 万エッジ、選択反映 200ms 等）はベンチマーク未実施です。
+- 大きな Scene は GameObject 64 個程度の「チャンク」に分けてフレームごとの時間予算内で解析し、変更のあったチャンクだけを再解析します
+  （3 万 GameObject・約 11 万ノード / 29 万エッジの Scene で、値の変更は数 ms、1 フレームの処理は最大 50ms 程度）。
+  初回の全体解析は数秒〜数十秒かけて裏で進みます。1 つの Component の走査や 1 つの Prefab の読み込みはそれ以上分割できないため、
+  非常に重い Component・Prefab ではその分だけ 1 フレームが長くなります。
+- 作成直後（未保存）のオブジェクトは保存されるまで一時 ID で索引します（保存後に永続 ID へ置き換わります）。
 
 ## テスト
 
