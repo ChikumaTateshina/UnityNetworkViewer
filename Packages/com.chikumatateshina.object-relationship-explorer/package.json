@@ -1,11 +1,13 @@
 {
   "name": "com.chikumatateshina.object-relationship-explorer",
   "displayName": "Object Relationship Explorer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "unity": "2022.3",
   "description": "Editor-only explorer that indexes Scene / GameObject / Component / Prefab / Asset / Udon relationships as a typed directed multigraph and visualizes them with selection-synchronized highlighting.",
   "documentationUrl": "https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.object-relationship-explorer/README.md",
   "changelogUrl": "https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.object-relationship-explorer/CHANGELOG.md",
+  "license": "MIT",
+  "licensesUrl": "https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/LICENSE",
   "keywords": [
     "editor",
     "graph",

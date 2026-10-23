@@ -10,7 +10,7 @@ using UnityEngine.SceneManagement;
 namespace ObjectRelationshipExplorer.Samples
 {
     /// <summary>
-    /// 手動確認用の Fixture を Assets/OREFixtures に生成する（要件 8: QA Fixture）。
+    /// 手動確認用の Fixture を Assets/OREFixtures に生成する。
     /// 複数 Scene / Prefab Variant / Nested Prefab / Instance Override / Missing Reference / 配列参照 / UnityEvent / Animator を含む。
     /// UdonSharp / Udon Graph の Fixture は SDK 導入プロジェクトで手動作成してください（README 参照）。
     /// </summary>

@@ -29,7 +29,7 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
    ```
    https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.object-relationship-explorer
    ```
-   （特定の版に固定する場合は末尾に `#v0.1.0` などを付けます）
+   （特定の版に固定する場合は末尾に `#v0.1.1` などを付けます）
 3. **手動**: Release の zip をプロジェクトの `Packages/com.chikumatateshina.object-relationship-explorer/` に展開
 
 ## 使い方
@@ -153,3 +153,10 @@ VRChat 用テスト（`Tests/VRChat`）は SDK 導入プロジェクトでのみ
 
 手動確認用 Fixture: Package Manager の Samples から **Fixture Generator** をインポートし、
 `Tools > Object Relationship Explorer > Generate Fixtures` を実行します（複数 Scene / Variant / Nested / Override / Missing / 配列 / UnityEvent / Animator）。
+
+## ライセンス
+
+[MIT License](LICENSE.md)
+
+UdonSharp ソース解析は VRChat SDK 同梱の Roslyn を実行時に参照します（本パッケージは再配布していません）。
+本パッケージは VRChat Inc. / Unity Technologies とは関係のない非公式ツールです。

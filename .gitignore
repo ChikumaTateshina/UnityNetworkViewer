@@ -6,3 +6,5 @@
 !/Website/
 /Packages/*
 !/Packages/com.chikumatateshina.object-relationship-explorer/
+!/LICENSE
+!/README.md

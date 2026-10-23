@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.1] - 2026-10-24
+
+### Added
+- MIT ライセンス（LICENSE.md）
+- VCC / ALCOM 用の VPM listing と導入ページ（GitHub Pages）、Git URL での導入手順
+
 ## [0.1.0] - 2026-10-23
 
 ### Added
