@@ -9,65 +9,199 @@
   :root {
     --bg: #f6f7f9; --card: #ffffff; --fg: #1d2129; --muted: #5d6573; --line: #dde1e7;
     --accent: #2f6fdf; --accent-fg: #ffffff; --code: #eef1f5;
+    --in: #d9822b; --out: #1f9e94; --prefab: #8a5cd1; --neutral: #8b93a1; --node: #f1f3f6;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #15171b; --card: #1e2127; --fg: #e6e8eb; --muted: #9aa2ae; --line: #30353d;
       --accent: #5b8ff0; --accent-fg: #0d1117; --code: #272b32;
+      --in: #e8994a; --out: #3cbfb3; --prefab: #a982e8; --neutral: #7d8592; --node: #2a2e35;
     }
   }
   :root[data-theme="dark"] {
     --bg: #15171b; --card: #1e2127; --fg: #e6e8eb; --muted: #9aa2ae; --line: #30353d;
     --accent: #5b8ff0; --accent-fg: #0d1117; --code: #272b32;
+    --in: #e8994a; --out: #3cbfb3; --prefab: #a982e8; --neutral: #7d8592; --node: #2a2e35;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
-  h1 { font-size: 26px; margin: 0 0 4px; }
-  h2 { font-size: 17px; margin: 0 0 8px; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.75 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 18px; margin: 0 0 10px; }
+  h3 { font-size: 15px; margin: 0 0 4px; }
   p { margin: 0 0 10px; }
-  .lead { color: var(--muted); margin-bottom: 28px; }
-  .version { display: inline-block; font-size: 13px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 10px; margin-left: 8px; vertical-align: middle; }
+  .lead { font-size: 16px; margin-bottom: 8px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  .version { display: inline-block; font-size: 13px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 10px; margin-left: 8px; vertical-align: middle; font-weight: normal; }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
   .btn { display: inline-block; background: var(--accent); color: var(--accent-fg); text-decoration: none; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 18px; cursor: pointer; font-size: 15px; }
   .btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); padding: 6px 12px; font-size: 13px; }
   .row { display: flex; gap: 8px; align-items: stretch; margin: 8px 0; }
   .row code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
   code { background: var(--code); border-radius: 6px; padding: 7px 10px; font: 13px/1.6 ui-monospace, Consolas, monospace; display: block; }
-  ol { margin: 6px 0 0; padding-left: 22px; }
+  li code, p code, td code { display: inline; padding: 1px 6px; }
+  .row code { display: block; }
+  ol, ul { margin: 6px 0 0; padding-left: 22px; }
+  li { margin-bottom: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 6px; }
+  .feature { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .feature p { margin: 0; font-size: 14px; color: var(--muted); }
+  .diagram { width: 100%; height: auto; display: block; margin: 4px 0 8px; }
+  .diagram text { font: 12px system-ui, sans-serif; fill: var(--fg); }
+  .diagram .lbl { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--card); stroke-width: 4px; stroke-linejoin: round; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+  .legend span::before { content: ""; display: inline-block; width: 18px; height: 0; border-top: 3px solid var(--c); vertical-align: middle; margin-right: 6px; }
+  .legend span.dash::before { border-top-style: dashed; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .install-tabs { display: grid; gap: 16px; }
+  .install-tabs > div, section { min-width: 0; }
   footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 28px; }
   .muted { color: var(--muted); font-size: 13px; }
   a { color: var(--accent); }
+  .toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; margin-bottom: 20px; }
 </style>
 </head>
 <body>
 <main>
   <h1>UnityNetworkViewer <span class="version" id="ver">…</span></h1>
-  <p class="lead">Unity / VRChat の Scene・GameObject・Component・Prefab・Asset・Udon の関係を索引化し、選択と連動してグラフ表示する Editor 専用拡張です。</p>
+  <p class="lead">「このオブジェクトは、どこから参照されていて、何を動かしているのか」を、Unity Editor 上のグラフで確認するための拡張です。</p>
+  <p class="sub">Scene・GameObject・Component・Prefab・Asset の関係に加え、VRChat ワールドの UdonBehaviour / UdonSharp / Udon Graph が操作する対象も推定して表示します。</p>
+  <nav class="toc">
+    <a href="#about">どんなツール？</a><a href="#features">できること</a><a href="#install">導入</a><a href="#usage">使い方</a><a href="#reading">表示の見方</a><a href="#notes">注意点</a>
+  </nav>
 
-  <section>
-    <h2>VCC / ALCOM で導入（VRChat プロジェクト）</h2>
-    <p><a class="btn" id="addVcc" href="#">Add to VCC</a></p>
-    <p class="muted">ボタンが動かない場合は、VCC の Settings → Packages → Add Repository に次の URL を登録してください。</p>
-    <div class="row"><code id="listingUrl"></code><button class="btn secondary" data-copy="listingUrl">コピー</button></div>
-    <p class="muted">登録後、プロジェクトの Manage Project から「UnityNetworkViewer」を追加します。</p>
+  <section id="about">
+    <h2>どんなツール？</h2>
+    <p>Unity の Inspector で分かるのは「このオブジェクトが何を参照しているか」までで、「どこから参照されているか」は分かりません。
+      UnityNetworkViewer はプロジェクト内の参照関係を索引にまとめ、Hierarchy や Project でオブジェクトを選ぶだけで、その周りの関係をグラフで表示します。</p>
+    <svg class="diagram" viewBox="0 0 640 230" role="img" aria-label="選択したオブジェクトを中心に、参照元と参照先が線でつながる図">
+      <defs>
+        <marker id="aIn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--in)"/></marker>
+        <marker id="aOut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--out)"/></marker>
+        <marker id="aPf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--prefab)"/></marker>
+      </defs>
+      <!-- 参照元 -->
+      <line x1="150" y1="55" x2="252" y2="103" style="stroke:var(--in)" stroke-width="2" marker-end="url(#aIn)"/>
+      <line x1="150" y1="175" x2="252" y2="127" style="stroke:var(--in)" stroke-width="2" marker-end="url(#aIn)"/>
+      <!-- 参照先 -->
+      <line x1="388" y1="103" x2="490" y2="45" style="stroke:var(--out)" stroke-width="2" marker-end="url(#aOut)"/>
+      <line x1="388" y1="115" x2="490" y2="115" style="stroke:var(--out)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#aOut)"/>
+      <line x1="388" y1="127" x2="490" y2="185" style="stroke:var(--prefab)" stroke-width="2" marker-end="url(#aPf)"/>
+      <!-- ノード -->
+      <g>
+        <rect x="20" y="36" width="130" height="38" rx="8" style="fill:var(--node);stroke:var(--in)" stroke-width="1.5"/>
+        <text x="85" y="60" text-anchor="middle">Button</text>
+        <rect x="20" y="156" width="130" height="38" rx="8" style="fill:var(--node);stroke:var(--in)" stroke-width="1.5"/>
+        <text x="85" y="180" text-anchor="middle">GameManager</text>
+        <rect x="254" y="92" width="132" height="46" rx="8" style="fill:var(--node);stroke:var(--accent)" stroke-width="3"/>
+        <text x="320" y="113" text-anchor="middle">DoorSwitch</text>
+        <text x="320" y="129" text-anchor="middle" class="lbl">選択中</text>
+        <rect x="492" y="26" width="130" height="38" rx="8" style="fill:var(--node);stroke:var(--out)" stroke-width="1.5"/>
+        <text x="557" y="50" text-anchor="middle">Door</text>
+        <rect x="492" y="96" width="130" height="38" rx="8" style="fill:var(--node);stroke:var(--out)" stroke-width="1.5"/>
+        <text x="557" y="120" text-anchor="middle">Animator</text>
+        <rect x="492" y="166" width="130" height="38" rx="8" style="fill:var(--node);stroke:var(--prefab)" stroke-width="1.5"/>
+        <text x="557" y="190" text-anchor="middle">Switch.prefab</text>
+      </g>
+      <!-- ラベル -->
+      <text x="160" y="96" class="lbl">UnityEvent</text>
+      <text x="176" y="170" class="lbl">参照</text>
+      <text x="440" y="96" class="lbl">SetActive</text>
+      <text x="400" y="106" class="lbl">SetTrigger（推定）</text>
+      <text x="440" y="166" class="lbl">Prefab 元</text>
+    </svg>
+    <p class="muted">表示のイメージ図です（実際の画面ではありません）。選んだオブジェクトを中心に、左に参照元、右に参照先が並びます。</p>
   </section>
 
-  <section>
-    <h2>Unity Package Manager で導入（Git URL）</h2>
-    <ol>
-      <li>Window → Package Manager → 左上の「+」→ Add package from git URL…</li>
-      <li>次の URL を入力して Add</li>
-    </ol>
-    <div class="row"><code id="gitUrl"></code><button class="btn secondary" data-copy="gitUrl">コピー</button></div>
-    <p class="muted">VRChat SDK が無いプロジェクトでも Unity 標準の解析は動作します。Unity 2022.3 以降。</p>
+  <section id="features">
+    <h2>できること</h2>
+    <div class="grid">
+      <div class="feature"><h3>選択と連動して表示</h3><p>Hierarchy・Scene View・Project で選んだオブジェクトの関係をすぐ表示します。グラフ上でクリックすると、Unity 側でもそのオブジェクトが選択されます。</p></div>
+      <div class="feature"><h3>参照元・参照先を両方向に</h3><p>Inspector の参照、配列の要素、UnityEvent の呼び出し先、親子関係、Component を、何段先まで辿るか（0〜5）指定して表示します。</p></div>
+      <div class="feature"><h3>Prefab の関係</h3><p>Prefab Instance と元の Prefab、Variant、入れ子の Prefab、Override の有無を表示します。</p></div>
+      <div class="feature"><h3>開いていない Scene も検索</h3><p>開いていない Scene の中身も索引するので、Scene をまたいで「どこで使われているか」を検索できます。</p></div>
+      <div class="feature"><h3>VRChat の Udon に対応</h3><p>UdonSharp と Udon Graph を静的に解析し、各インスタンスの変数設定と結び付けて、<code>SetActive</code> や <code>SendCustomEvent</code> の操作先を推定します。</p></div>
+      <div class="feature"><h3>問題の発見</h3><p>Missing Reference、参照先を特定できない呼び出し、循環参照、どこにもつながらないオブジェクトを一覧で表示します。</p></div>
+      <div class="feature"><h3>根拠を表示</h3><p>線ごとに、どのプロパティやソースのどの行から分かった関係なのかと、確度（確定 / 推定 / 未解決）を表示します。</p></div>
+      <div class="feature"><h3>検索とエクスポート</h3><p>名前・型・Scene・メソッド名などで検索できます。表示中のグラフは JSON / GraphML / SVG で書き出せます。</p></div>
+    </div>
+    <h3 style="margin-top:16px">こんなときに</h3>
+    <ul>
+      <li>オブジェクトを消したり名前を変えたりする前に、どこから使われているか確かめたい</li>
+      <li>他の人が作ったワールドのギミックが、どのスイッチから何を動かしているのか追いたい</li>
+      <li>Missing になった参照を、Scene をまたいでまとめて洗い出したい</li>
+      <li>Prefab の Override がどこで入っているか確認したい</li>
+    </ul>
   </section>
 
-  <section>
+  <section id="install">
+    <h2>導入</h2>
+    <div class="install-tabs">
+      <div>
+        <h3>VCC / ALCOM（VRChat プロジェクト）</h3>
+        <p><a class="btn" id="addVcc" href="#">Add to VCC</a></p>
+        <p class="muted">ボタンが動かない場合は、VCC の Settings → Packages → Add Repository に次の URL を登録してください。</p>
+        <div class="row"><code id="listingUrl"></code><button class="btn secondary" data-copy="listingUrl">コピー</button></div>
+        <p class="muted">登録後、プロジェクトの Manage Project から「UnityNetworkViewer」を追加します。</p>
+      </div>
+      <div>
+        <h3>Unity Package Manager（Git URL）</h3>
+        <ol>
+          <li>Window → Package Manager → 左上の「+」→ Add package from git URL…</li>
+          <li>次の URL を入力して Add</li>
+        </ol>
+        <div class="row"><code id="gitUrl"></code><button class="btn secondary" data-copy="gitUrl">コピー</button></div>
+        <p class="muted" id="zipLine"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="usage">
     <h2>使い方</h2>
-    <p>Window → Analysis → UnityNetworkViewer を開きます。詳細は <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.unitynetworkviewer/README.md">README</a> を参照してください。</p>
-    <p class="muted" id="zipLine"></p>
+    <ol>
+      <li><strong>ウィンドウを開く</strong>: メニューの Window → Analysis → UnityNetworkViewer。開くと解析が始まり、まず開いている Scene、続けてプロジェクト全体を裏で索引します（作業は止まりません。Unity の Progress からキャンセルできます）。</li>
+      <li><strong>オブジェクトを選ぶ</strong>: Hierarchy や Project でオブジェクトを選ぶと、その周りの関係がグラフに出ます。</li>
+      <li><strong>範囲を調整する</strong>: 左のパネルで、方向（参照元 / 参照先 / 両方）、何段先まで辿るか（0〜5）、関係の種類、確度を絞り込みます。</li>
+      <li><strong>詳しく見る</strong>: ノードを選ぶと、右のパネルに参照元・参照先の一覧と、その関係の根拠が出ます。ダブルクリックで Unity 上の位置へ移動します。</li>
+      <li><strong>検索する</strong>: 上部の検索欄で探します。空白で区切ると AND、先頭に <code>-</code> を付けると除外です。
+        <div class="row"><code>door type:Animator scene:Main method:SetActive flag:Missing</code></div>
+      </li>
+    </ol>
+    <p class="muted">操作: ドラッグでパン、ホイールでズーム、<code>F</code> で選択中のノードへ移動、<code>A</code> で全体表示。ノードを右クリックすると、経路の表示、隣接ノードの展開、ピン留め、ID のコピーなどができます。</p>
   </section>
+
+  <section id="reading">
+    <h2>表示の見方</h2>
+    <div class="legend" style="margin-bottom:10px">
+      <span style="--c:var(--accent)">選択中（太枠）</span>
+      <span style="--c:var(--in)">参照元</span>
+      <span style="--c:var(--out)">参照先</span>
+      <span style="--c:var(--prefab)">Prefab 関係</span>
+      <span style="--c:var(--neutral)">親子</span>
+      <span class="dash" style="--c:var(--muted)">推定（破線）</span>
+    </div>
+    <table>
+      <tr><th>確定</th><td>Inspector の設定値など、シリアライズされたデータから分かる関係です。参照があることを示すもので、実行時に必ず使われるという意味ではありません。</td></tr>
+      <tr><th>推定</th><td>スクリプトの静的解析から推定した関係です。if の中など、条件付きで実行される処理を含みます。</td></tr>
+      <tr><th>未解決</th><td>Missing Reference や <code>GameObject.Find</code> のように、参照先を特定できない呼び出しです。</td></tr>
+    </table>
+    <p class="muted" style="margin-top:8px">色だけでなく、線の種類・矢印・ラベルでも区別しています。選択から2段目以降は、離れるほど薄く表示されます。</p>
+  </section>
+
+  <section id="notes">
+    <h2>動作環境と注意点</h2>
+    <table>
+      <tr><th>Unity</th><td>2022.3（2022.3.22f1 で確認）</td></tr>
+      <tr><th>VRChat SDK</th><td>任意。Worlds 3.4.0 以上で Udon の解析が有効になります（3.10.5 で確認）。SDK が無いプロジェクトでも、Unity 標準の解析は使えます。</td></tr>
+      <tr><th>安全性</th><td>解析は読み取りのみです。Scene や Prefab を変更済み（Dirty）にしたり、保存したり、勝手に開いたりしません。開いていない Scene を開くのは、確認ダイアログで選んだときだけです。</td></tr>
+      <tr><th>ビルド</th><td>Editor 専用です。ゲームのビルドや VRChat へのアップロードには含まれません。</td></tr>
+      <tr><th>制限</th><td>開いていない Scene の解析は、テキスト形式（Force Text）の Scene が対象です。UdonSharp の解析は構文だけを見ているため、基底クラスのフィールドやプロパティの連鎖などは「未解決」と表示されます。</td></tr>
+    </table>
+    <p class="muted" style="margin-top:8px">詳しい仕様は <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.unitynetworkviewer/README.md">README</a>、変更履歴は <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.unitynetworkviewer/CHANGELOG.md">CHANGELOG</a> を参照してください。</p>
+  </section>
+
   <footer>
     <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer">GitHub</a> · <a href="https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/LICENSE">MIT License</a> · © 2026 Chikuma Tateshina<br>
     VRChat Inc. / Unity Technologies とは関係のない非公式ツールです。
@@ -108,10 +242,10 @@
     document.getElementById('ver').textContent = 'v' + latest;
     setGit('v' + latest);
     const z = document.getElementById('zipLine');
-    z.append('手動導入用: ');
+    z.append('手動で入れる場合: ');
     const a = document.createElement('a');
     a.href = versions[latest].url; a.textContent = pkg + '-' + latest + '.zip';
-    z.append(a, '（プロジェクトの Packages/' + pkg + '/ に展開）');
+    z.append(a, ' をプロジェクトの Packages/' + pkg + '/ に展開');
   }).catch(() => { document.getElementById('ver').textContent = '—'; });
 </script>
 </body>
