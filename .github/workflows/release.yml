@@ -43,11 +43,14 @@ jobs:
           files: ${{ steps.meta.outputs.name }}-${{ steps.meta.outputs.version }}.zip
           generate_release_notes: true
 
-  # GITHUB_TOKEN で作成した Release は他のワークフローを起動しないため、ここから直接呼ぶ
+  # GITHUB_TOKEN で作成した Release は他のワークフローを起動せず、github-pages 環境はタグからのデプロイを
+  # 許可しないため、main ブランチで Pages ワークフローを明示的に起動する
   pages:
     needs: release
-    uses: ./.github/workflows/pages.yml
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
+      actions: write
+    steps:
+      - run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
