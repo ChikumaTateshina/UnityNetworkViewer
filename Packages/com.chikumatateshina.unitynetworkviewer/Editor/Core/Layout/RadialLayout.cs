@@ -84,6 +84,8 @@ namespace UnityNetworkViewer.Core.Layout
             // ルートの配置（複数ルートは中心付近の小円上）
             float totalRootWeight = 0f;
             foreach (int r in roots) totalRootWeight += weight[r];
+            var angleStart = new float[n];
+            var angleEnd = new float[n];
             float angle = 0f;
             float rootRadius = roots.Count > 1 ? Math.Max(input.NodeWidth * 0.6f, roots.Count * input.NodeWidth / (2f * (float)Math.PI)) : 0f;
             foreach (int r in roots)
@@ -91,12 +93,16 @@ namespace UnityNetworkViewer.Core.Layout
                 float span = (float)(2 * Math.PI) * weight[r] / totalRootWeight;
                 float mid = angle + span * 0.5f;
                 result.Positions[r] = new Vec2((float)Math.Cos(mid) * rootRadius, (float)Math.Sin(mid) * rootRadius);
-                Place(r, angle, angle + span);
+                angleStart[r] = angle;
+                angleEnd[r] = angle + span;
                 angle += span;
             }
 
-            void Place(int v, float a0, float a1)
+            // Parents precede children in BFS order; avoid recursion on deep hierarchies.
+            foreach (int v in orderVisited)
             {
+                cancellation.ThrowIfCancellationRequested();
+                float a0 = angleStart[v], a1 = angleEnd[v];
                 float total = 0f;
                 foreach (int c in children[v]) total += weight[c];
                 float a = a0;
@@ -106,7 +112,8 @@ namespace UnityNetworkViewer.Core.Layout
                     float mid = a + span * 0.5f;
                     float rr = radius[Math.Min(depth[c], radius.Length - 1)];
                     result.Positions[c] = new Vec2((float)Math.Cos(mid) * rr, (float)Math.Sin(mid) * rr);
-                    Place(c, a, a + span);
+                    angleStart[c] = a;
+                    angleEnd[c] = a + span;
                     a += span;
                 }
             }

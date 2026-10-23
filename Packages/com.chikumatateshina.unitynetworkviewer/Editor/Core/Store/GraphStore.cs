@@ -109,6 +109,8 @@ namespace UnityNetworkViewer.Core
         public IEnumerable<GraphNode> Nodes => _nodes.Values;
         public IEnumerable<GraphEdge> Edges => _edges.Values;
         public IEnumerable<OwnerRecord> Owners => _owners.Values;
+        public IEnumerable<string> SceneGuids => _byScene.Keys;
+        public IEnumerable<string> ProviderIds => _byProvider.Keys;
 
         public GraphNode GetNode(string id)
         {

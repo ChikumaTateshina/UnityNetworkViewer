@@ -25,6 +25,7 @@ namespace UnityNetworkViewer.Editor.UI
         long _shownRevision = -1;
         string _shownEdge;
         double _shownAt;
+        int _outPage, _inPage;
 
         /// <summary>方向ごとに一覧へ出す関係の上限（参照が非常に多い Asset でも固まらないように）。</summary>
         const int MaxRowsPerDirection = 300;
@@ -134,6 +135,7 @@ namespace UnityNetworkViewer.Editor.UI
             bool nodeChanged = force || id != _shownNode || storeChanged;
             if (nodeChanged)
             {
+                _outPage = _inPage = 0;
                 _shownNode = id;
                 _shownRevision = _vm.Store.Revision;
                 _shownAt = now;
@@ -183,9 +185,23 @@ namespace UnityNetworkViewer.Editor.UI
             if (node.Kind == NodeKind.UdonMethod || node.Kind == NodeKind.UdonVariable || node.Kind == NodeKind.ScriptAsset)
                 AddButton("ソース", () => NodeNavigator.TryOpenSource(node, _vm.Store));
 
+            if (_outPage > 0) AddButton("前の参照先", () => ChangePage(true, -1));
+            if ((_outPage + 1L) * MaxRowsPerDirection < _vm.Store.GetOutEdgeIds(id).Count)
+                AddButton("次の参照先", () => ChangePage(true, 1));
+            if (_inPage > 0) AddButton("前の参照元", () => ChangePage(false, -1));
+            if ((_inPage + 1L) * MaxRowsPerDirection < _vm.Store.GetInEdgeIds(id).Count)
+                AddButton("次の参照元", () => ChangePage(false, 1));
             AddEdgeRows(id, true);
             AddEdgeRows(id, false);
             _list.Rebuild();
+        }
+
+        void ChangePage(bool outgoing, int delta)
+        {
+            if (_shownRevision != _vm.Store.Revision) { Refresh(true); return; }
+            if (outgoing) _outPage = Math.Max(0, _outPage + delta);
+            else _inPage = Math.Max(0, _inPage + delta);
+            ShowNode(_shownNode);
         }
 
         void AddEdgeRows(string id, bool outgoing)
@@ -193,14 +209,17 @@ namespace UnityNetworkViewer.Editor.UI
             // 件数は全件数えるが、行は上限まで（数千〜数万の参照を持つ Asset で固まらないように）
             int total = outgoing ? _vm.Store.GetOutEdgeIds(id).Count : _vm.Store.GetInEdgeIds(id).Count;
             var edges = new List<GraphEdge>(Math.Min(total, MaxRowsPerDirection));
+            int offset = (outgoing ? _outPage : _inPage) * MaxRowsPerDirection;
+            int skipped = 0;
             foreach (var e in outgoing ? _vm.Store.GetOutEdges(id) : _vm.Store.GetInEdges(id))
             {
+                if (skipped++ < offset) continue;
                 if (edges.Count >= MaxRowsPerDirection) break;
                 edges.Add(e);
             }
             _rows.Add(new Row { Header = true, Text = (outgoing ? "▶ 参照先 / 子 (Outgoing) " : "◀ 参照元 / 親 (Incoming) ") + total });
             if (total > edges.Count)
-                _rows.Add(new Row { Header = true, Text = $"<color=#999>（先頭 {edges.Count} 件を表示。全件はグラフの「隣接ノードを展開」やエクスポートで確認できます）</color>" });
+                _rows.Add(new Row { Header = true, Text = $"<color=#999>（{offset + 1}〜{offset + edges.Count} 件を表示。「前の参照」「次の参照」でページを切り替え）</color>" });
             foreach (var group in edges.GroupBy(e => e.Kind).OrderBy(g => g.Key))
             {
                 foreach (var e in group.OrderBy(x => x.PropertyPath ?? x.MemberName ?? ""))

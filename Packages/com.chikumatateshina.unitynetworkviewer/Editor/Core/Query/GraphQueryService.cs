@@ -330,7 +330,7 @@ namespace UnityNetworkViewer.Core
             var terms = SearchTerm.Parse(query);
             if (terms.Count == 0) return results;
 
-            foreach (var node in _store.Nodes)
+            foreach (var node in SearchCandidates(terms))
             {
                 bool ok = true;
                 foreach (var t in terms)
@@ -347,6 +347,65 @@ namespace UnityNetworkViewer.Core
                 return c != 0 ? c : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
             });
             return results;
+        }
+
+        IEnumerable<GraphNode> SearchCandidates(List<SearchTerm> terms)
+        {
+            IReadOnlyCollection<string> smallest = null;
+            foreach (var term in terms)
+            {
+                if (term.Negate) continue;
+                var buckets = new List<IReadOnlyCollection<string>>();
+                if (term.Key == "kind")
+                {
+                    foreach (var kind in EdgeKindInfo.AllNodeKinds)
+                        if (StringUtil.ContainsIgnoreCase(kind.ToString(), term.Value))
+                            buckets.Add(_store.GetNodesOfKind(kind));
+                }
+                else if (term.Key == "provider")
+                {
+                    foreach (var provider in _store.ProviderIds)
+                        if (StringUtil.ContainsIgnoreCase(provider, term.Value))
+                            buckets.Add(_store.GetNodesOfProvider(provider));
+                }
+                else if (term.Key == "scene")
+                {
+                    foreach (var guid in _store.SceneGuids)
+                    {
+                        var scene = _store.GetNode(NodeIds.Scene(guid));
+                        if (string.Equals(guid, term.Value, StringComparison.OrdinalIgnoreCase) ||
+                            (scene != null && (StringUtil.ContainsIgnoreCase(scene.Name, term.Value) ||
+                                              StringUtil.ContainsIgnoreCase(scene.AssetPath, term.Value))))
+                            buckets.Add(_store.GetNodesInScene(guid));
+                    }
+                }
+                else continue;
+                int count = 0;
+                foreach (var bucket in buckets) count += bucket.Count;
+                if (count == 0) yield break;
+                // Broad filters are cheaper to scan directly. A single indexed bucket
+                // can be enumerated without copying tens of thousands of IDs.
+                if (smallest != null && count >= smallest.Count) continue;
+                if (buckets.Count == 1) smallest = buckets[0];
+                else if (count <= _store.NodeCount / 2)
+                {
+                    var union = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var bucket in buckets) union.UnionWith(bucket);
+                    smallest = union;
+                }
+            }
+            if (smallest == null)
+            {
+                foreach (var node in _store.Nodes) yield return node;
+            }
+            else
+            {
+                foreach (var id in smallest)
+                {
+                    var node = _store.GetNode(id);
+                    if (node != null) yield return node;
+                }
+            }
         }
 
         static int ScoreKind(NodeKind k)

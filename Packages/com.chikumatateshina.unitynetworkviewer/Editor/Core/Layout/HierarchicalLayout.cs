@@ -60,6 +60,17 @@ namespace UnityNetworkViewer.Core.Layout
             int[] comp = LayoutUtil.ConnectedComponents(undirected, out int compCount);
             var compOrder = OrderComponents(input, comp, compCount);
 
+            // Build membership and ordering workspace once, rather than scanning and
+            // allocating the entire graph for every disconnected component.
+            var members = new List<int>[compCount];
+            for (int i = 0; i < compCount; i++) members[i] = new List<int>();
+            for (int v = 0; v < n; v++) members[comp[v]].Add(v);
+            var pos = new float[n];
+            var bary = new float[n];
+            var preds = new List<int>[n];
+            for (int i = 0; i < n; i++) preds[i] = new List<int>();
+            for (int v = 0; v < n; v++) foreach (int w in adj[v]) preds[w].Add(v);
+
             float cellW = input.NodeWidth + input.HorizontalGap;
             float cellH = input.NodeHeight + input.VerticalGap;
             float offsetX = 0f;
@@ -69,9 +80,8 @@ namespace UnityNetworkViewer.Core.Layout
                 cancellation.ThrowIfCancellationRequested();
                 // 成分内のノードを層ごとに分ける
                 var layers = new SortedDictionary<int, List<int>>();
-                for (int v = 0; v < n; v++)
+                foreach (int v in members[ci])
                 {
-                    if (comp[v] != ci) continue;
                     int layer = layerOf[scc[v]];
                     if (!layers.TryGetValue(layer, out var list)) layers[layer] = list = new List<int>();
                     list.Add(v);
@@ -80,7 +90,7 @@ namespace UnityNetworkViewer.Core.Layout
                 // 同じ SCC のノードは隣接させる
                 foreach (var l in layerList) l.Sort((a, b) => scc[a] != scc[b] ? scc[a].CompareTo(scc[b]) : a.CompareTo(b));
 
-                OrderByBarycenter(layerList, adj, input, cancellation);
+                OrderByBarycenter(layerList, adj, preds, pos, bary, cancellation);
 
                 float maxWidth = 0f;
                 float y = 0f;
@@ -102,8 +112,7 @@ namespace UnityNetworkViewer.Core.Layout
                     }
                 }
                 // 成分を中心揃えした分だけ右へずらす
-                for (int v = 0; v < n; v++)
-                    if (comp[v] == ci) result.Positions[v].X += maxWidth * 0.5f;
+                foreach (int v in members[ci]) result.Positions[v].X += maxWidth * 0.5f;
                 offsetX += maxWidth + cellW;
             }
 
@@ -140,14 +149,10 @@ namespace UnityNetworkViewer.Core.Layout
             return order;
         }
 
-        void OrderByBarycenter(List<List<int>> layers, List<int>[] adj, LayoutInput input, CancellationToken ct)
+        void OrderByBarycenter(List<List<int>> layers, List<int>[] adj, List<int>[] preds,
+            float[] pos, float[] bary, CancellationToken ct)
         {
-            int n = adj.Length;
-            var pos = new float[n];
-            var preds = new List<int>[n];
-            for (int i = 0; i < n; i++) preds[i] = new List<int>();
-            for (int v = 0; v < n; v++) foreach (int w in adj[v]) preds[w].Add(v);
-
+            if (layers.Count < 2) return;
             void Refresh()
             {
                 foreach (var l in layers)
@@ -165,7 +170,6 @@ namespace UnityNetworkViewer.Core.Layout
                 for (int li = start; li != end; li += step)
                 {
                     var layer = layers[li];
-                    var bary = new Dictionary<int, float>(layer.Count);
                     foreach (int v in layer)
                     {
                         var neigh = down ? preds[v] : adj[v];

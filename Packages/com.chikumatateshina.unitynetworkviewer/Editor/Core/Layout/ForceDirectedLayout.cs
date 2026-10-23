@@ -41,13 +41,15 @@ namespace UnityNetworkViewer.Core.Layout
             var pinned = new bool[n];
             foreach (var kv in input.Pinned) if (kv.Key >= 0 && kv.Key < n) pinned[kv.Key] = true;
 
+            var grid = n > GridThreshold ? new Dictionary<long, int>(n) : null;
+            var next = n > GridThreshold ? new int[n] : null;
             for (int iter = 0; iter < Iterations; iter++)
             {
                 if ((iter & 15) == 0) cancellation.ThrowIfCancellationRequested();
                 for (int i = 0; i < n; i++) disp[i] = default;
 
                 if (n <= GridThreshold) RepulseAll(pos, disp, k);
-                else RepulseGrid(pos, disp, k);
+                else RepulseGrid(pos, disp, k, grid, next);
 
                 foreach (var e in input.Edges)
                 {
@@ -95,17 +97,17 @@ namespace UnityNetworkViewer.Core.Layout
             }
         }
 
-        static void RepulseGrid(Vec2[] pos, Vec2[] disp, float k)
+        static void RepulseGrid(Vec2[] pos, Vec2[] disp, float k, Dictionary<long, int> grid, int[] next)
         {
             int n = pos.Length;
             float cell = k * 2f;
             float k2 = k * k;
-            var grid = new Dictionary<long, List<int>>();
+            grid.Clear();
             for (int i = 0; i < n; i++)
             {
                 long key = Key((int)Math.Floor(pos[i].X / cell), (int)Math.Floor(pos[i].Y / cell));
-                if (!grid.TryGetValue(key, out var list)) grid[key] = list = new List<int>();
-                list.Add(i);
+                next[i] = grid.TryGetValue(key, out int head) ? head : -1;
+                grid[key] = i;
             }
             for (int i = 0; i < n; i++)
             {
@@ -113,8 +115,8 @@ namespace UnityNetworkViewer.Core.Layout
                 for (int dx = -1; dx <= 1; dx++)
                     for (int dy = -1; dy <= 1; dy++)
                     {
-                        if (!grid.TryGetValue(Key(cx + dx, cy + dy), out var list)) continue;
-                        foreach (int j in list)
+                        if (!grid.TryGetValue(Key(cx + dx, cy + dy), out int head)) continue;
+                        for (int j = head; j >= 0; j = next[j])
                         {
                             if (j == i) continue;
                             var d = pos[i] - pos[j];

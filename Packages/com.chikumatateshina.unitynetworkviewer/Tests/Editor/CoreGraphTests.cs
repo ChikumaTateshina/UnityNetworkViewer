@@ -269,6 +269,30 @@ namespace UnityNetworkViewer.Tests
         }
 
         [Test]
+        public void Search_IndexedFiltersSupportPartialNamesNegationAndReplacement()
+        {
+            var store = new GraphStore();
+            var r = new AnalysisResult("test");
+            r.AddNode(new GraphNode { Id = NodeIds.Scene("s1"), Kind = NodeKind.Scene, Name = "Main World", SceneGuid = "s1", AssetPath = "Assets/Main.unity", ProviderId = "unity.hierarchy" });
+            r.AddNode(new GraphNode { Id = "a", Kind = NodeKind.GameObject, Name = "Door", SceneGuid = "s1", ProviderId = "unity.hierarchy" });
+            r.AddNode(new GraphNode { Id = "b", Kind = NodeKind.Component, Name = "Door", SceneGuid = "s1", ProviderId = "unity.serialized" });
+            r.AddNode(new GraphNode { Id = "c", Kind = NodeKind.GameObject, Name = "Door", SceneGuid = "s2", ProviderId = "custom" });
+            store.ReplaceOwner("test|a", r, null);
+            var q = new GraphQueryService(store);
+            CollectionAssert.AreEquivalent(new[] { "a" }, q.Search("kind:game scene:main provider:HIER door").Select(n => n.Id));
+            CollectionAssert.AreEquivalent(new[] { "a", "b" }, q.Search("scene:S1 door").Select(n => n.Id));
+            CollectionAssert.AreEquivalent(new[] { "c" }, q.Search("-provider:unity door").Select(n => n.Id));
+            Assert.IsEmpty(q.Search("scene:unknown door"));
+            Assert.IsEmpty(q.Search("kind:unknown"));
+            var replacement = new AnalysisResult("test");
+            replacement.AddNode(new GraphNode { Id = "a", Kind = NodeKind.Component, Name = "Door", SceneGuid = "s2", ProviderId = "custom" });
+            store.ReplaceOwner("test|a", replacement, null);
+            Assert.IsEmpty(q.Search("provider:unity"));
+            Assert.IsEmpty(q.Search("scene:s1"));
+            CollectionAssert.AreEquivalent(new[] { "a" }, q.Search("kind:comp provider:custom scene:s2").Select(n => n.Id));
+        }
+
+        [Test]
         public void CrossSceneBoundary_CanBeDisabled()
         {
             var store = new GraphStore();
@@ -369,6 +393,50 @@ namespace UnityNetworkViewer.Tests
             Assert.AreEqual(comp[0], comp[1]);
             Assert.AreEqual(comp[1], comp[2]);
             Assert.AreNotEqual(comp[0], comp[3]);
+        }
+
+        [Test]
+        public void Hierarchical_ManyDisconnectedPairs_KeepDirectionAndDistinctPositions()
+        {
+            var input = Input(4000);
+            for (int i = 0; i < 4000; i += 2) input.AddEdge("n" + i, "n" + (i + 1), EdgeKind.ParentChild);
+            var positions = new HierarchicalLayout().Compute(input, CancellationToken.None).Positions;
+            var distinct = new HashSet<(float, float)>();
+            for (int i = 0; i < positions.Length; i++)
+            {
+                Assert.IsTrue(distinct.Add((positions[i].X, positions[i].Y)));
+                if (i % 2 == 0) Assert.Less(positions[i].Y, positions[i + 1].Y);
+            }
+        }
+
+        [Test]
+        public void Radial_DeepChain_ProducesFinitePositionsWithoutRecursion()
+        {
+            var input = Input(20000);
+            for (int i = 1; i < 20000; i++) input.AddEdge("n" + (i - 1), "n" + i, EdgeKind.ParentChild);
+            var positions = new RadialLayout().Compute(input, CancellationToken.None).Positions;
+            Assert.AreEqual(20000, positions.Length);
+            foreach (var p in positions)
+                Assert.IsFalse(float.IsNaN(p.X) || float.IsInfinity(p.X) || float.IsNaN(p.Y) || float.IsInfinity(p.Y));
+            Assert.Greater(positions[19999].Length, positions[1].Length);
+        }
+
+        [Test]
+        public void ForceDirected_GridPath_IsDeterministicAndRespectsPins()
+        {
+            var input = Input(800);
+            input.Pinned[0] = new Vec2(42, -17);
+            var layout = new ForceDirectedLayout { Iterations = 12 };
+            var first = layout.Compute(input, CancellationToken.None).Positions;
+            var second = layout.Compute(input, CancellationToken.None).Positions;
+            Assert.AreEqual(42, first[0].X);
+            Assert.AreEqual(-17, first[0].Y);
+            for (int i = 0; i < first.Length; i++)
+            {
+                Assert.AreEqual(first[i].X, second[i].X);
+                Assert.AreEqual(first[i].Y, second[i].Y);
+                Assert.IsFalse(float.IsNaN(first[i].X) || float.IsInfinity(first[i].X));
+            }
         }
 
         [Test]

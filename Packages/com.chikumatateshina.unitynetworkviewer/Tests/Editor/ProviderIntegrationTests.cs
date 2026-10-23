@@ -60,6 +60,123 @@ namespace UnityNetworkViewer.Tests
         }
 
         [Test]
+        public void ObjectTablePreparation_ResumesAndSharesCompletedTable()
+        {
+            BuildScene();
+            var target = AnalysisTarget.ForLoadedScene(SceneManager.GetActiveScene());
+            var context = new AnalysisContext(UnvSettings.instance, new PrefabStructureCache(), null, () => true);
+            var prepare = typeof(AnalysisContext).GetMethod("PrepareTable", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            int steps = 0;
+            while (!(bool)prepare.Invoke(context, new object[] { target }))
+                Assert.Less(++steps, 1000);
+            Assert.Greater(steps, 1);
+            var actual = context.GetTable(target);
+            var expected = ObjectTable.Create(target);
+            CollectionAssert.AreEquivalent(expected.GameObjects, actual.GameObjects);
+            CollectionAssert.AreEquivalent(expected.Components, actual.Components);
+            Assert.AreSame(actual, context.GetTable(target));
+        }
+
+        [Test]
+        public void DetailPanel_PagesKeepAllocationBoundedAndReachRemainingEdges()
+        {
+            var service = (UnvService)System.Activator.CreateInstance(typeof(UnvService), true);
+            var result = G.Result(Enumerable.Range(0, 750).Select(i => ("Hub", "Leaf" + i, EdgeKind.SerializedReference)).ToArray());
+            service.Store.ReplaceOwner("test|hub", result, null);
+            using (var vm = new UnityNetworkViewer.Editor.UI.GraphViewModel(service))
+            {
+                vm.OnUnitySelection(new[] { "Hub" });
+                var panel = new UnityNetworkViewer.Editor.UI.DetailPanel();
+                panel.Bind(vm);
+                var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var rowsField = panel.GetType().GetField("_rows", flags);
+                var changePage = panel.GetType().GetMethod("ChangePage", flags);
+                var seen = new HashSet<string>();
+                for (int page = 0; page < 3; page++)
+                {
+                    var rows = (System.Collections.IEnumerable)rowsField.GetValue(panel);
+                    int count = 0;
+                    foreach (var row in rows)
+                    {
+                        var edge = (GraphEdge)row.GetType().GetField("Edge").GetValue(row);
+                        if (edge == null) continue;
+                        Assert.IsTrue(seen.Add(edge.Id));
+                        count++;
+                    }
+                    Assert.AreEqual(page < 2 ? 300 : 150, count);
+                    if (page < 2) changePage.Invoke(panel, new object[] { true, 1 });
+                }
+                Assert.AreEqual(750, seen.Count);
+            }
+        }
+
+        [Test]
+        public void IncrementalProviders_MatchSynchronousResultsAcrossYields()
+        {
+            BuildScene();
+            var scene = SceneManager.GetActiveScene();
+            EditorSceneManager.SaveScene(scene, Folder + "/Incremental.unity");
+            var target = AnalysisTarget.ForLoadedScene(scene);
+            foreach (var provider in new IAnalysisProvider[] { new SceneHierarchyProvider(), new SerializedReferenceProvider(), new PrefabProvider() })
+            {
+                var expected = provider.Analyze(target, new AnalysisContext(UnvSettings.instance, new PrefabStructureCache()));
+                var actual = new AnalysisResult(provider.Id);
+                var context = new AnalysisContext(UnvSettings.instance, new PrefabStructureCache(), null, () => true);
+                int yields = 0;
+                using (var work = ((IIncrementalAnalysisProvider)provider).AnalyzeIncrementally(target, context, actual).GetEnumerator())
+                    while (work.MoveNext()) yields++;
+                Assert.Greater(yields, 1, provider.Id);
+                CollectionAssert.AreEquivalent(expected.Nodes.Select(n => n.Id), actual.Nodes.Select(n => n.Id), provider.Id);
+                CollectionAssert.AreEquivalent(expected.Edges.Select(e => (e.SourceId, e.TargetId, e.Kind, e.PropertyPath, e.MemberName)),
+                    actual.Edges.Select(e => (e.SourceId, e.TargetId, e.Kind, e.PropertyPath, e.MemberName)), provider.Id);
+            }
+        }
+
+        [Test]
+        public void PrefabVerificationScope_ObservesCacheInvalidation()
+        {
+            var root = new GameObject("CachedPrefab");
+            string path = Folder + "/Cached.prefab";
+            PrefabUtility.SaveAsPrefabAsset(root, path);
+            var cache = new PrefabStructureCache();
+            var context = new AnalysisContext(UnvSettings.instance, cache);
+            string guid = AssetDatabase.AssetPathToGUID(path);
+            var first = context.GetPrefabStructure(guid);
+            Assert.IsNotNull(first);
+            Assert.AreSame(first, context.GetPrefabStructure(guid));
+            cache.Invalidate(guid);
+            var refreshed = context.GetPrefabStructure(guid);
+            Assert.IsNotNull(refreshed);
+            Assert.AreNotSame(first, refreshed);
+            Assert.AreEqual(first.RootName, refreshed.RootName);
+        }
+
+        [Test]
+        public void ViewCaches_IgnoreUnrelatedOwnersAndRefreshRemovedEdges()
+        {
+            var service = (UnvService)System.Activator.CreateInstance(typeof(UnvService), true);
+            service.Store.ReplaceOwner("test|shown", G.Result(("A", "B", EdgeKind.SerializedReference)), null);
+            using (var vm = new UnityNetworkViewer.Editor.UI.GraphViewModel(service))
+            {
+                vm.OnUnitySelection(new[] { "A" });
+                var nodes = vm.GetDrawnNodes();
+                var edges = vm.GetVisibleEdges();
+                var apply = typeof(UnityNetworkViewer.Editor.UI.GraphViewModel).GetMethod("ApplyStoreChange", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                service.Store.ReplaceOwner("test|unrelated", G.Result(("X", "Y", EdgeKind.SerializedReference)), null);
+                apply.Invoke(vm, null);
+                Assert.AreSame(nodes, vm.GetDrawnNodes());
+                Assert.AreSame(edges, vm.GetVisibleEdges());
+                var replacement = new AnalysisResult("test");
+                replacement.AddNode(G.N("A"));
+                replacement.AddNode(G.N("B"));
+                service.Store.ReplaceOwner("test|shown", replacement, null);
+                apply.Invoke(vm, null);
+                Assert.IsEmpty(vm.GetVisibleEdges());
+                Assert.AreNotSame(edges, vm.GetVisibleEdges());
+            }
+        }
+
+        [Test]
         public void LoadedScene_HierarchyComponentsAndSerializedReferences()
         {
             var (door, handle, b, lamp) = BuildScene();

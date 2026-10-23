@@ -126,20 +126,27 @@ namespace UnityNetworkViewer.Editor.UI
             _items.Clear();
             bool warnOnly = _warnOnly.value;
             int errors = 0, warnings = 0, total = 0;
+            var errorItems = new List<AnalysisDiagnostic>();
+            var warningItems = new List<AnalysisDiagnostic>();
+            var infoItems = new List<AnalysisDiagnostic>();
             void Add(AnalysisDiagnostic d)
             {
                 if (warnOnly && d.Severity == DiagnosticSeverity.Info) return;
                 total++;
                 if (d.Severity == DiagnosticSeverity.Error) errors++;
                 else if (d.Severity == DiagnosticSeverity.Warning) warnings++;
-                _items.Add(d);
+                var bucket = d.Severity == DiagnosticSeverity.Error ? errorItems :
+                    d.Severity == DiagnosticSeverity.Warning ? warningItems : infoItems;
+                if (bucket.Count < MaxItems) bucket.Add(d);
             }
             foreach (var d in _vm.Store.AllDiagnostics()) Add(d);
             if (_graphReport != null) foreach (var d in _graphReport.Items) Add(d);
             // 重要度順（同順位は元の順）に並べ、上限で切る
-            var ordered = _items.OrderByDescending(d => d.Severity).Take(MaxItems).ToList();
-            _items.Clear();
-            _items.AddRange(ordered);
+            foreach (var bucket in new[] { errorItems, warningItems, infoItems })
+            {
+                int count = Math.Min(bucket.Count, MaxItems - _items.Count);
+                for (int i = 0; i < count; i++) _items.Add(bucket[i]);
+            }
             _list.itemsSource = _items;
             _list.Rebuild();
             _summary.text = $"エラー {errors} / 警告 {warnings} / 合計 {total}" + (total > _items.Count ? $"（先頭 {_items.Count} 件を表示）" : "") +

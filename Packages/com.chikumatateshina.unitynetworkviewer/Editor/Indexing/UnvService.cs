@@ -219,7 +219,11 @@ namespace UnityNetworkViewer.Editor
 
         sealed class DiscoveryJob
         {
-            public readonly List<string> Guids = new List<string>();
+            public readonly HashSet<string> Seen = new HashSet<string>(StringComparer.Ordinal);
+            public List<string> Filters;
+            public string[] Folders;
+            public int NextFilter;
+            public string[] Guids = Array.Empty<string>();
             public HashSet<string> SkipKeys;
             public AnalysisPriority Priority;
             public int Next;
@@ -232,24 +236,31 @@ namespace UnityNetworkViewer.Editor
         /// </summary>
         public void EnqueueProjectDiscovery(HashSet<string> skipKeys, AnalysisPriority priority)
         {
-            string[] folders = UnvSettings.instance.includePackages ? null : new[] { "Assets" };
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var job = new DiscoveryJob { SkipKeys = skipKeys, Priority = priority };
-            foreach (var filter in ProviderRegistry.GetAssetSearchFilters())
+            _discovery = new DiscoveryJob
             {
-                string[] guids = folders == null ? AssetDatabase.FindAssets(filter) : AssetDatabase.FindAssets(filter, folders);
-                foreach (var guid in guids)
-                    if (seen.Add(guid)) job.Guids.Add(guid);
-            }
-            _discovery = job;
+                SkipKeys = skipKeys,
+                Priority = priority,
+                Folders = UnvSettings.instance.includePackages ? null : new[] { "Assets" },
+                Filters = new List<string>(ProviderRegistry.GetAssetSearchFilters()),
+            };
         }
 
         void UpdateDiscovery()
         {
             var job = _discovery;
-            while (job.Next < job.Guids.Count && _frame.ElapsedMilliseconds < UpdateBudgetMs)
+            // FindAssets itself is a synchronous Unity API. Issue at most one filter
+            // per update and process its result incrementally before the next filter.
+            if (job.Next >= job.Guids.Length && job.NextFilter < job.Filters.Count)
+            {
+                string filter = job.Filters[job.NextFilter++];
+                job.Guids = job.Folders == null ? AssetDatabase.FindAssets(filter) : AssetDatabase.FindAssets(filter, job.Folders);
+                job.Next = 0;
+                return;
+            }
+            while (job.Next < job.Guids.Length && _frame.ElapsedMilliseconds < UpdateBudgetMs)
             {
                 string guid = job.Guids[job.Next++];
+                if (!job.Seen.Add(guid)) continue;
                 string path = AssetDatabase.GUIDToAssetPath(guid);
                 if (string.IsNullOrEmpty(path) || AssetDatabase.IsValidFolder(path)) continue;
                 AnalysisTarget target;
@@ -258,16 +269,13 @@ namespace UnityNetworkViewer.Editor
                     target = AnalysisTarget.ForScenePath(path);
                     if (target.Kind == AnalysisTargetKind.LoadedScene) continue;
                 }
-                else
-                {
-                    target = AnalysisTarget.ForAsset(guid, path);
-                }
+                else target = AnalysisTarget.ForAsset(guid, path);
                 if (job.SkipKeys != null && job.SkipKeys.Contains(target.Key)) continue;
                 if (!AnyProviderCanAnalyze(target)) continue;
                 Scheduler.Enqueue(target, job.Priority);
                 job.Count++;
             }
-            if (job.Next < job.Guids.Count) return;
+            if (job.Next < job.Guids.Length || job.NextFilter < job.Filters.Count) return;
             _discovery = null;
             if (job.Count > 0) AddLog($"{job.Count} 件の Asset/Scene を索引キューに追加しました");
         }

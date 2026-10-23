@@ -81,6 +81,9 @@ namespace UnityNetworkViewer.Editor
             public string DepHash;
             public int Index;
             public bool HasTransient;
+            public AnalysisContext Context;
+            public IEnumerator<int> Work;
+            public AnalysisResult PartialResult;
         }
 
         enum StepResult
@@ -296,6 +299,13 @@ namespace UnityNetworkViewer.Editor
                 int dropped = _queued.Count + (_current != null ? 1 : 0) + _parked.Count;
                 foreach (var q in _queues) q.Clear();
                 _queued.Clear();
+                foreach (var job in _parked)
+                {
+                    job.Work?.Dispose();
+                    job.Context?.ReleaseTable(job.Target);
+                }
+                _current?.Work?.Dispose();
+                if (_current != null) _current.Context?.ReleaseTable(_current.Target);
                 _parked.Clear();
                 _current = null;
                 _status.Running = false;
@@ -399,13 +409,16 @@ namespace UnityNetworkViewer.Editor
         void FinishJob(Job job, AnalysisContext context)
         {
             _status.Completed++;
-            context.ReleaseTable(job.Target);
+            job.Work?.Dispose();
+            (job.Context ?? context).ReleaseTable(job.Target);
         }
 
         // ------------------------------------------------------------------ Job steps
 
         StepResult RunStep(Job job, AnalysisContext context)
         {
+            if (job.Context == null) job.Context = context;
+            context = job.Context;
             if (!job.Started)
             {
                 job.Started = true;
@@ -435,10 +448,30 @@ namespace UnityNetworkViewer.Editor
             AnalysisResult result;
             try
             {
-                result = provider.Analyze(target, context) ?? new AnalysisResult(provider.Id);
+                if (TargetFilters.IsHierarchyTarget(target) && !context.PrepareTable(target)) return StepResult.Progress;
+                if (provider is IIncrementalAnalysisProvider incremental)
+                {
+                    if (job.Work == null)
+                    {
+                        job.PartialResult = new AnalysisResult(provider.Id);
+                        job.Work = incremental.AnalyzeIncrementally(target, context, job.PartialResult).GetEnumerator();
+                    }
+                    // At least one unit per step, then yield to the next editor update.
+                    while (job.Work.MoveNext())
+                        if (context.OutOfTime) return StepResult.Progress;
+                    result = job.PartialResult;
+                    job.Work.Dispose();
+                    job.Work = null;
+                    job.PartialResult = null;
+                }
+                else result = provider.Analyze(target, context) ?? new AnalysisResult(provider.Id);
             }
             catch (Exception ex)
             {
+                job.Work?.Dispose();
+                job.Work = null;
+                job.PartialResult = null;
+                context.ReleaseTable(target);
                 if (target.Kind == AnalysisTargetKind.SceneChunk && (ex is MissingReferenceException || ex is NullReferenceException))
                 {
                     // 解析中にオブジェクトが削除された。古い結果は残し、Scene を分割し直す

@@ -17,7 +17,7 @@ namespace UnityNetworkViewer.Editor
     /// 準備段階（<see cref="Prepare"/>）でファイルの読み込みと構文解析をワーカースレッドで行い、
     /// 参照される Prefab の構造をフレームごとに少しずつ構築してから、本解析を行う。
     /// </summary>
-    public sealed class UnloadedSceneProvider : IAnalysisProvider, IAssetDiscoveryProvider, IPreparedAnalysisProvider
+    public sealed class UnloadedSceneProvider : IAnalysisProvider, IAssetDiscoveryProvider, IPreparedAnalysisProvider, IIncrementalAnalysisProvider
     {
         sealed class Preparation
         {
@@ -82,7 +82,7 @@ namespace UnityNetworkViewer.Editor
             while (prep.Next < prep.PrefabGuids.Count)
             {
                 if (context.OutOfTime) return false;
-                context.PrefabStructures.Get(prep.PrefabGuids[prep.Next++], context.Settings);
+                context.GetPrefabStructure(prep.PrefabGuids[prep.Next++]);
             }
             return true;
         }
@@ -129,6 +129,12 @@ namespace UnityNetworkViewer.Editor
         public AnalysisResult Analyze(AnalysisTarget target, AnalysisContext context)
         {
             var result = new AnalysisResult(Id);
+            foreach (var step in AnalyzeIncrementally(target, context, result)) { }
+            return result;
+        }
+
+        public IEnumerable<int> AnalyzeIncrementally(AnalysisTarget target, AnalysisContext context, AnalysisResult result)
+        {
             string sceneGuid = target.Guid;
             string sceneId = NodeIds.Scene(sceneGuid);
             result.AddNode(new GraphNode
@@ -144,7 +150,7 @@ namespace UnityNetworkViewer.Editor
                 ProviderId = Id,
             });
 
-            UnityYamlDocument doc;
+            UnityYamlDocument doc = null;
             try
             {
                 // 準備済みならその結果を使う（Prepare を経ない呼び出しでは同期的に読む）
@@ -153,17 +159,16 @@ namespace UnityNetworkViewer.Editor
             catch (Exception ex)
             {
                 result.AddDiagnostic(DiagnosticSeverity.Warning, DiagnosticCodes.ProviderError, "Scene ファイルを読めません: " + ex.Message, sceneId, target.Path);
-                return result;
             }
+            if (doc == null) yield break;
 
             if (!doc.IsText)
             {
                 AddDependencyOnly(result, target, sceneId);
-                return result;
+                yield break;
             }
 
-            new Builder(this, result, doc, target, sceneGuid, sceneId, context).Build();
-            return result;
+            foreach (var step in new Builder(this, result, doc, target, sceneGuid, sceneId, context).Build()) yield return step;
         }
 
         static void AddDependencyOnly(AnalysisResult result, AnalysisTarget target, string sceneId)
@@ -257,17 +262,18 @@ namespace UnityNetworkViewer.Editor
                 if (!t.Stripped) return LocalId(t.GetLocalReference("m_GameObject"));
                 if (!t.TryGetReference("m_CorrespondingSourceObject", out var cr)) return null;
                 long pi = t.GetLocalReference("m_PrefabInstance");
-                var structure = _ctx.PrefabStructures.Get(cr.Guid, _ctx.Settings);
+                var structure = _ctx.GetPrefabStructure(cr.Guid);
                 if (structure != null && structure.ByLocalId.TryGetValue(cr.FileId, out var entry))
                     return SO(entry.GameObjectLocalId, pi);
                 return SO(cr.FileId, pi);
             }
 
-            public void Build()
+            public IEnumerable<int> Build()
             {
                 var prefabInstances = new List<UnityYamlObject>();
                 foreach (var o in _doc.Objects)
                 {
+                    yield return 0;
                     if (o.Stripped) continue;
                     if (o.ClassId == 1001 || o.TypeName == "PrefabInstance") { prefabInstances.Add(o); continue; }
                     if (o.ClassId == 1) AddGameObject(o);
@@ -278,8 +284,12 @@ namespace UnityNetworkViewer.Editor
                     if (!o.TryGetReference("m_GameObject", out var goRef) || goRef.FileId == 0) continue;
                     AddComponent(o, goRef.FileId);
                 }
-                foreach (var pi in prefabInstances) AddPrefabInstance(pi);
-                FillHierarchyPaths();
+                foreach (var pi in prefabInstances)
+                {
+                    yield return 0;
+                    foreach (var step in AddPrefabInstance(pi)) yield return step;
+                }
+                foreach (var step in FillHierarchyPaths()) yield return step;
             }
 
             void AddGameObject(UnityYamlObject o)
@@ -438,7 +448,7 @@ namespace UnityNetworkViewer.Editor
                 PrefabStructure structure = null;
                 if (!builtin && path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
                 {
-                    structure = _ctx.PrefabStructures.Get(guid, _ctx.Settings);
+                    structure = _ctx.GetPrefabStructure(guid);
                     isMain = structure != null && structure.RootGameObjectLocalId == fileId;
                 }
 
@@ -483,12 +493,12 @@ namespace UnityNetworkViewer.Editor
                 return n;
             }
 
-            void AddPrefabInstance(UnityYamlObject pi)
+            IEnumerable<int> AddPrefabInstance(UnityYamlObject pi)
             {
                 long P = pi.FileId;
                 if (!pi.TryGetReference("m_SourcePrefab", out var src) || string.IsNullOrEmpty(src.Guid))
                 {
-                    if (!pi.TryGetReference("m_ParentPrefab", out src) || string.IsNullOrEmpty(src.Guid)) return;
+                    if (!pi.TryGetReference("m_ParentPrefab", out src) || string.IsNullOrEmpty(src.Guid)) yield break;
                 }
                 string sourceGuid = src.Guid;
                 _r.DependencyKeys.Add(sourceGuid);
@@ -496,14 +506,14 @@ namespace UnityNetworkViewer.Editor
                 long transformParent = pi.GetLocalReference("m_Modification.m_TransformParent");
                 string parentId = transformParent == 0 ? _sceneId : GameObjectOfTransform(transformParent);
 
-                var structure = _ctx.PrefabStructures.Get(sourceGuid, _ctx.Settings);
+                var structure = _ctx.GetPrefabStructure(sourceGuid);
                 if (structure == null)
                 {
                     string missingId = NodeIds.Unresolved(SO(P, 0), "missing-prefab");
                     _r.AddNode(new GraphNode { Id = missingId, Kind = NodeKind.UnresolvedReference, Name = "Missing Prefab", Flags = NodeFlags.Missing | NodeFlags.Unloaded, SceneGuid = _sceneGuid, ProviderId = _p.Id });
                     if (parentId != null) _r.AddEdge(new GraphEdge { SourceId = parentId, TargetId = missingId, Kind = EdgeKind.ParentChild, Evidence = EvidenceLevel.Unresolved, ProvenanceSceneGuid = _sceneGuid });
                     _r.AddDiagnostic(DiagnosticSeverity.Warning, DiagnosticCodes.MissingPrefab, "Prefab Asset を読み込めません (GUID " + sourceGuid + ")", missingId, _target.Path, null, pi.Line);
-                    return;
+                    yield break;
                 }
 
                 // 削除された Component / GameObject
@@ -521,6 +531,7 @@ namespace UnityNetworkViewer.Editor
                 int overrideCount = 0;
                 foreach (var m in pi.Modifications)
                 {
+                    yield return 0;
                     if (m.Target.Guid != sourceGuid) continue;
                     overrideCount++;
                     overriddenPaths.Add(m.Target.FileId + "|" + m.PropertyPath);
@@ -532,6 +543,7 @@ namespace UnityNetworkViewer.Editor
 
                 foreach (var entry in structure.Entries)
                 {
+                    yield return 0;
                     if (removed.Contains(entry.LocalId) || removed.Contains(entry.GameObjectLocalId)) continue;
                     string id = SO(entry.LocalId, P);
                     var node = new GraphNode
@@ -591,6 +603,7 @@ namespace UnityNetworkViewer.Editor
                 // Prefab 側の参照（Override されていないもの）
                 foreach (var ir in structure.References)
                 {
+                    yield return 0;
                     if (removed.Contains(ir.SourceLocalId)) continue;
                     if (overriddenPaths.Contains(ir.SourceLocalId + "|" + ir.PropertyPath)) continue;
                     string sourceId = SO(ir.SourceLocalId, P);
@@ -626,6 +639,7 @@ namespace UnityNetworkViewer.Editor
                 // Override された参照
                 foreach (var m in pi.Modifications)
                 {
+                    yield return 0;
                     if (m.ObjectReference.IsNull) continue;
                     if (m.Target.Guid != sourceGuid)
                     {
@@ -643,7 +657,7 @@ namespace UnityNetworkViewer.Editor
                 }
             }
 
-            void FillHierarchyPaths()
+            IEnumerable<int> FillHierarchyPaths()
             {
                 var memo = new Dictionary<string, string>(StringComparer.Ordinal);
                 string PathOf(string id, int guard)
@@ -658,10 +672,12 @@ namespace UnityNetworkViewer.Editor
                 }
                 foreach (var n in _r.Nodes)
                 {
+                    yield return 0;
                     if (n.Kind == NodeKind.GameObject && n.SceneGuid == _sceneGuid) n.HierarchyPath = PathOf(n.Id, 0);
                 }
                 foreach (var e in _r.Edges)
                 {
+                    yield return 0;
                     if (e.Kind != EdgeKind.OwnsComponent) continue;
                     var go = _r.GetNode(e.SourceId);
                     var c = _r.GetNode(e.TargetId);

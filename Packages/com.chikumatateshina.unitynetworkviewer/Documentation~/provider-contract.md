@@ -26,3 +26,23 @@ public interface IAnalysisProvider
   `Prepare` を経ずに `Analyze` が呼ばれても（同期的に）動作すること。
 - 対象を特定できない参照は null エッジにせず、`UnresolvedReference` ノード + `EvidenceLevel.Unresolved` エッジ + 診断で表す。
 - `Confirmed` を「実行される」の意味で使わない。静的推定は `Inferred`。
+
+## 時間分割する Provider
+
+重い解析は `IIncrementalAnalysisProvider` を追加実装する。
+`AnalyzeIncrementally(target, context, result)` は、GameObject / Component などの小さな単位ごとに
+`yield return 0` を返す。値自体は使わず、Scheduler が時間予算を確認する境界として扱う。
+結果は渡された `AnalysisResult` に蓄積し、列挙が完了した時だけ owner を差し替える。
+キャンセルや例外では列挙を Dispose し、途中の結果をコミットしない。
+既存の `Analyze` は同じ列挙を最後まで進める同期ラッパーとして維持する。
+
+Scheduler はロード済み Scene / チャンク / Prefab の ObjectTable も段階生成し、
+ターゲットの実行コンテキストを完了まで保持する。外部参照の大量の ID 取得は
+`ObjectTable.PrimeIdsIncrementally`（同じ Editor アセンブリ内）で分割できる。
+
+未ロード Scene の Prefab 構造は `context.GetPrefabStructure(guid)` で取得する。
+同じコンテキスト内では検証済みの構造を再利用し、PrefabStructureCache の
+Invalidate / Clear による Revision 変更時に再検証する。
+
+時間予算は協調的な目安であり、Unity の個々の同期 API 呼び出しや
+GraphStore の原子的なコミットを途中中断するものではない。

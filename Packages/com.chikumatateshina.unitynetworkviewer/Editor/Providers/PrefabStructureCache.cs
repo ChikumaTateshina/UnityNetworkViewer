@@ -57,12 +57,19 @@ namespace UnityNetworkViewer.Editor
     {
         readonly Dictionary<string, PrefabStructure> _cache = new Dictionary<string, PrefabStructure>(StringComparer.Ordinal);
 
+        public long Revision { get; private set; }
+
         public void Invalidate(string guid)
         {
             if (guid != null) _cache.Remove(guid);
+            Revision++;
         }
 
-        public void Clear() => _cache.Clear();
+        public void Clear()
+        {
+            _cache.Clear();
+            Revision++;
+        }
 
         public PrefabStructure Get(string guid, UnvSettings settings)
         {

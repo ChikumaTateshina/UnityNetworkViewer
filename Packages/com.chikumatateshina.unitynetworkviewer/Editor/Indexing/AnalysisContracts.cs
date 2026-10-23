@@ -191,13 +191,36 @@ namespace UnityNetworkViewer.Editor
         bool Prepare(AnalysisTarget target, AnalysisContext context);
     }
 
+    /// <summary>Yield after bounded units of work. The scheduler commits only after completion.</summary>
+    public interface IIncrementalAnalysisProvider
+    {
+        IEnumerable<int> AnalyzeIncrementally(AnalysisTarget target, AnalysisContext context, AnalysisResult result);
+    }
+
     public sealed class AnalysisContext
     {
         public UnvSettings Settings { get; }
         public PrefabStructureCache PrefabStructures { get; }
         readonly Dictionary<string, ObjectTable> _tables = new Dictionary<string, ObjectTable>();
         readonly Func<string, Dictionary<int, string>> _sceneIdCache;
+        readonly Dictionary<string, IEnumerator<ObjectTable>> _tableWork = new Dictionary<string, IEnumerator<ObjectTable>>();
         readonly Func<bool> _outOfTime;
+        readonly Dictionary<string, PrefabStructure> _verifiedPrefabs = new Dictionary<string, PrefabStructure>(StringComparer.Ordinal);
+        long _prefabRevision = -1;
+
+        public PrefabStructure GetPrefabStructure(string guid)
+        {
+            if (string.IsNullOrEmpty(guid)) return null;
+            if (_prefabRevision != PrefabStructures.Revision)
+            {
+                _verifiedPrefabs.Clear();
+                _prefabRevision = PrefabStructures.Revision;
+            }
+            if (_verifiedPrefabs.TryGetValue(guid, out var structure)) return structure;
+            structure = PrefabStructures.Get(guid, Settings);
+            _verifiedPrefabs[guid] = structure;
+            return structure;
+        }
 
         public AnalysisContext(UnvSettings settings, PrefabStructureCache prefabStructures)
             : this(settings, prefabStructures, null, null)
@@ -230,9 +253,39 @@ namespace UnityNetworkViewer.Editor
             return table;
         }
 
+        internal bool PrepareTable(AnalysisTarget target)
+        {
+            if (_tables.ContainsKey(target.Key)) return true;
+            if (!_tableWork.TryGetValue(target.Key, out var work))
+            {
+                var cache = target.IsScene ? _sceneIdCache?.Invoke(target.SceneKey) : null;
+                work = ObjectTable.CreateIncrementally(target, cache).GetEnumerator();
+                _tableWork[target.Key] = work;
+            }
+            while (work.MoveNext())
+            {
+                if (work.Current != null)
+                {
+                    _tables[target.Key] = work.Current;
+                    work.Dispose();
+                    _tableWork.Remove(target.Key);
+                    return true;
+                }
+                if (OutOfTime) return false;
+            }
+            work.Dispose();
+            _tableWork.Remove(target.Key);
+            throw new InvalidOperationException("Object table creation did not return a table");
+        }
+
         public void ReleaseTable(AnalysisTarget target)
         {
             _tables.Remove(target.Key);
+            if (_tableWork.TryGetValue(target.Key, out var work))
+            {
+                work.Dispose();
+                _tableWork.Remove(target.Key);
+            }
         }
     }
 

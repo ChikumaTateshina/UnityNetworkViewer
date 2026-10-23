@@ -54,6 +54,13 @@ namespace UnityNetworkViewer.Editor
         /// <param name="sharedIds">Scene 単位で共有する instanceId→ID キャッシュ（null 可）。</param>
         public static ObjectTable Create(AnalysisTarget target, Dictionary<int, string> sharedIds)
         {
+            ObjectTable table = null;
+            foreach (var step in CreateIncrementally(target, sharedIds)) if (step != null) table = step;
+            return table;
+        }
+
+        internal static IEnumerable<ObjectTable> CreateIncrementally(AnalysisTarget target, Dictionary<int, string> sharedIds)
+        {
             if (target.Kind == AnalysisTargetKind.LoadedScene || target.Kind == AnalysisTargetKind.SceneChunk)
             {
                 var scene = target.GetScene();
@@ -62,12 +69,14 @@ namespace UnityNetworkViewer.Editor
                 if (!scene.IsValid() || !scene.isLoaded)
                 {
                     table.InvalidReason = "Scene is not loaded";
-                    return table;
+                    yield return table;
+                    yield break;
                 }
                 if (target.Kind == AnalysisTargetKind.LoadedScene)
                 {
-                    table.Collect(scene.GetRootGameObjects(), false);
-                    return table;
+                    foreach (var step in table.Collect(scene.GetRootGameObjects(), false)) yield return null;
+                    yield return table;
+                    yield break;
                 }
                 var rootIds = target.ChunkRoots ?? new[] { target.ChunkRootInstanceId };
                 var roots = new GameObject[rootIds.Length];
@@ -77,11 +86,13 @@ namespace UnityNetworkViewer.Editor
                     if (roots[i] == null || roots[i].scene != scene)
                     {
                         table.InvalidReason = "Chunk root no longer exists in the scene";
-                        return table;
+                        yield return table;
+                        yield break;
                     }
                 }
-                table.Collect(roots, target.ChunkIsSingle);
-                return table;
+                foreach (var step in table.Collect(roots, target.ChunkIsSingle)) yield return null;
+                yield return table;
+                yield break;
             }
 
             if (target.Kind == AnalysisTargetKind.Asset && target.Path != null && target.Path.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase))
@@ -91,22 +102,25 @@ namespace UnityNetworkViewer.Editor
                 if (root == null)
                 {
                     table.InvalidReason = "Prefab could not be loaded";
-                    return table;
+                    yield return table;
+                    yield break;
                 }
-                table.Collect(new[] { root }, false);
-                return table;
+                foreach (var step in table.Collect(new[] { root }, false)) yield return null;
+                yield return table;
+                yield break;
             }
 
             var empty = new ObjectTable(target, false, null, target.Guid, target.Path, null, null) { InvalidReason = "Target has no GameObject hierarchy" };
-            return empty;
+            yield return empty;
         }
 
-        void Collect(GameObject[] roots, bool rootsOnly)
+        IEnumerable<int> Collect(GameObject[] roots, bool rootsOnly)
         {
             var stack = new Stack<Transform>();
             for (int i = roots.Length - 1; i >= 0; i--) if (roots[i] != null) stack.Push(roots[i].transform);
             while (stack.Count > 0)
             {
+                yield return 0;
                 var t = stack.Pop();
                 var go = t.gameObject;
                 _goIndex[go.GetInstanceID()] = GameObjects.Count;
@@ -118,11 +132,27 @@ namespace UnityNetworkViewer.Editor
                 for (int i = t.childCount - 1; i >= 0; i--) stack.Push(t.GetChild(i));
             }
 
-            var all = new List<Object>(GameObjects.Count + Components.Count);
-            foreach (var go in GameObjects) all.Add(go);
-            foreach (var c in Components) all.Add(c);
-            foreach (var o in all) _members.Add(o.GetInstanceID());
-            PrimeIds(all);
+            // Bound GlobalObjectId batch size and temporary memory for huge prefabs.
+            var batch = new List<Object>(128);
+            foreach (var go in GameObjects)
+            {
+                _members.Add(go.GetInstanceID());
+                batch.Add(go);
+                if (batch.Count < 128) continue;
+                PrimeIds(batch);
+                batch.Clear();
+                yield return 0;
+            }
+            foreach (var c in Components)
+            {
+                _members.Add(c.GetInstanceID());
+                batch.Add(c);
+                if (batch.Count < 128) continue;
+                PrimeIds(batch);
+                batch.Clear();
+                yield return 0;
+            }
+            PrimeIds(batch);
             IsValid = true;
         }
 
@@ -158,6 +188,20 @@ namespace UnityNetworkViewer.Editor
             var arr = missing.ToArray();
             var ids = ObjectIdUtility.GetIds(arr);
             for (int i = 0; i < arr.Length; i++) Remember(arr[i], ids[i]);
+        }
+
+        internal IEnumerable<int> PrimeIdsIncrementally(IEnumerable<Object> objects)
+        {
+            var batch = new List<Object>(128);
+            foreach (var obj in objects)
+            {
+                batch.Add(obj);
+                if (batch.Count < 128) continue;
+                PrimeIds(batch);
+                batch.Clear();
+                yield return 0;
+            }
+            PrimeIds(batch);
         }
 
         void Remember(Object o, string id)

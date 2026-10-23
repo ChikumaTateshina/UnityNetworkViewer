@@ -123,12 +123,11 @@ namespace UnityNetworkViewer.Editor.UI
         readonly HashSet<string> _priorityRequested = new HashSet<string>(StringComparer.Ordinal);
         List<string> _visibleEdgesCache;
         long _visibleEdgesRevision = -1;
-        long _visibleEdgesStoreRevision = -1;
         List<string> _drawnCache;
         long _drawnRevision = -1;
-        long _drawnStoreRevision = -1;
         readonly HashSet<string> _pendingOwners = new HashSet<string>(StringComparer.Ordinal);
         bool _pendingCleared;
+        readonly HashSet<string> _viewOwners = new HashSet<string>(StringComparer.Ordinal);
         Task<LayoutResult> _layoutTask;
         CancellationTokenSource _layoutCts;
         List<string> _layoutIds;
@@ -161,7 +160,27 @@ namespace UnityNetworkViewer.Editor.UI
                 _visibleEdgesRevision = -1;
                 _drawnRevision = -1;
             }
+            if ((change & (ViewChange.Structure | ViewChange.Selection)) != 0) RememberViewOwners();
             Changed?.Invoke(change);
+        }
+
+        void RememberViewOwners()
+        {
+            _viewOwners.Clear();
+            foreach (var id in Visible)
+                foreach (var owner in Store.GetNodeOwners(id)) _viewOwners.Add(owner);
+            foreach (var id in Highlight.NodeDepth.Keys)
+                foreach (var owner in Store.GetNodeOwners(id)) _viewOwners.Add(owner);
+            foreach (var eid in GetVisibleEdges())
+            {
+                var owner = Store.GetEdgeOwner(eid);
+                if (owner != null) _viewOwners.Add(owner);
+            }
+            foreach (var eid in Highlight.EdgeRoles.Keys)
+            {
+                var owner = Store.GetEdgeOwner(eid);
+                if (owner != null) _viewOwners.Add(owner);
+            }
         }
 
         // ------------------------------------------------------------------ Query options
@@ -489,18 +508,17 @@ namespace UnityNetworkViewer.Editor.UI
         /// <summary>描画対象ノード（キャッシュ。呼び出し側で変更しないこと）。</summary>
         public IReadOnlyList<string> GetDrawnNodes()
         {
-            if (_drawnCache != null && _drawnRevision == ViewRevision && _drawnStoreRevision == Store.Revision) return _drawnCache;
+            if (_drawnCache != null && _drawnRevision == ViewRevision) return _drawnCache;
             var list = new List<string>();
             foreach (var id in Visible) if (IsDrawn(id)) list.Add(id);
             _drawnCache = list;
             _drawnRevision = ViewRevision;
-            _drawnStoreRevision = Store.Revision;
             return list;
         }
 
         public List<string> GetVisibleEdges()
         {
-            if (_visibleEdgesCache != null && _visibleEdgesRevision == ViewRevision && _visibleEdgesStoreRevision == Store.Revision) return _visibleEdgesCache;
+            if (_visibleEdgesCache != null && _visibleEdgesRevision == ViewRevision) return _visibleEdgesCache;
             var list = new List<string>();
             foreach (var id in Visible)
             {
@@ -514,7 +532,6 @@ namespace UnityNetworkViewer.Editor.UI
             }
             _visibleEdgesCache = list;
             _visibleEdgesRevision = ViewRevision;
-            _visibleEdgesStoreRevision = Store.Revision;
             return list;
         }
 
@@ -541,6 +558,7 @@ namespace UnityNetworkViewer.Editor.UI
             if (Visible.Count == 0 && Highlight.NodeDepth.Count == 0) return false;
             foreach (var key in _pendingOwners)
             {
+                if (_viewOwners.Contains(key)) return true;
                 var rec = Store.GetOwner(key);
                 if (rec == null) return true; // 削除された owner（内容は不明なので反映する）
                 foreach (var n in rec.Nodes)
@@ -589,6 +607,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         public void RequestLayout(bool focusAfter)
         {
+            _layoutCts?.Cancel();
             _layoutPending = true;
             _focusAfterLayout |= focusAfter;
         }
@@ -613,7 +632,9 @@ namespace UnityNetworkViewer.Editor.UI
                 var task = _layoutTask;
                 var ids = _layoutIds;
                 _layoutTask = null;
-                if (task.Status == TaskStatus.RanToCompletion && task.Result != null) ApplyLayout(ids, task.Result);
+                _layoutCts?.Dispose();
+                _layoutCts = null;
+                if (!_layoutPending && task.Status == TaskStatus.RanToCompletion && task.Result != null) ApplyLayout(ids, task.Result);
                 else if (task.Exception != null) Debug.LogWarning("[UnityNetworkViewer] Layout failed: " + task.Exception.GetBaseException().Message);
             }
             if (_layoutPending && _layoutTask == null) StartLayout();

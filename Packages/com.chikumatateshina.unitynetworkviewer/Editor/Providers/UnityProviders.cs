@@ -18,7 +18,7 @@ namespace UnityNetworkViewer.Editor
     }
 
     /// <summary>Scene → Root、親子、GameObject → Component、Component → Script、Missing Script。</summary>
-    public sealed class SceneHierarchyProvider : IAnalysisProvider, IAssetDiscoveryProvider
+    public sealed class SceneHierarchyProvider : IAnalysisProvider, IIncrementalAnalysisProvider, IAssetDiscoveryProvider
     {
         public string Id => ProviderIds.Hierarchy;
         public int Version => 1;
@@ -30,11 +30,17 @@ namespace UnityNetworkViewer.Editor
         public AnalysisResult Analyze(AnalysisTarget target, AnalysisContext context)
         {
             var result = new AnalysisResult(Id);
+            foreach (var step in AnalyzeIncrementally(target, context, result)) { }
+            return result;
+        }
+
+        public IEnumerable<int> AnalyzeIncrementally(AnalysisTarget target, AnalysisContext context, AnalysisResult result)
+        {
             var table = context.GetTable(target);
             if (!table.IsValid)
             {
                 result.AddDiagnostic(DiagnosticSeverity.Warning, DiagnosticCodes.Unsupported, table.InvalidReason, null, target.Path);
-                return result;
+                yield break;
             }
 
             // Scene ノードは Scene 全体の解析でのみ出す（チャンク解析では Scheduler が別 owner として出す）
@@ -42,7 +48,9 @@ namespace UnityNetworkViewer.Editor
 
             for (int i = 0; i < table.GameObjects.Count; i++)
             {
+                yield return 0;
                 var go = table.GameObjects[i];
+                if (go == null) continue;
                 var node = result.AddNode(table.CreateGameObjectNode(go, Id));
                 var parent = go.transform.parent;
                 if (parent == null)
@@ -99,7 +107,7 @@ namespace UnityNetworkViewer.Editor
                     }
                 }
             }
-            return result;
+            yield break;
         }
 
         /// <summary>ロード済み Scene のノード。</summary>
@@ -123,7 +131,7 @@ namespace UnityNetworkViewer.Editor
     }
 
     /// <summary>Component の SerializedProperty から ObjectReference / UnityEvent PersistentCall を抽出する。</summary>
-    public sealed class SerializedReferenceProvider : IAnalysisProvider
+    public sealed class SerializedReferenceProvider : IAnalysisProvider, IIncrementalAnalysisProvider
     {
         public string Id => ProviderIds.Serialized;
         public int Version => 1;
@@ -134,14 +142,21 @@ namespace UnityNetworkViewer.Editor
         public AnalysisResult Analyze(AnalysisTarget target, AnalysisContext context)
         {
             var result = new AnalysisResult(Id);
+            foreach (var step in AnalyzeIncrementally(target, context, result)) { }
+            return result;
+        }
+
+        public IEnumerable<int> AnalyzeIncrementally(AnalysisTarget target, AnalysisContext context, AnalysisResult result)
+        {
             var table = context.GetTable(target);
-            if (!table.IsValid) return result;
+            if (!table.IsValid) yield break;
 
             // 1) 走査 2) 参照先の ID をまとめて計算（チャンク外の参照を 1 件ずつ計算しない） 3) 出力
             var scanned = new List<(Component c, List<SerializedReferenceInfo> refs)>();
             var targets = new List<UnityEngine.Object>();
             foreach (var c in table.Components)
             {
+                yield return 0;
                 if (c == null || SerializedReferenceScanner.ShouldSkipObject(c)) continue;
                 var refs = new List<SerializedReferenceInfo>();
                 try
@@ -162,10 +177,12 @@ namespace UnityNetworkViewer.Editor
                 scanned.Add((c, refs));
                 foreach (var r in refs) if (r.Target != null) targets.Add(r.Target);
             }
-            table.PrimeIds(targets);
+            foreach (var step in table.PrimeIdsIncrementally(targets)) yield return step;
 
             foreach (var (c, refs) in scanned)
             {
+                yield return 0;
+                if (c == null) continue;
                 string sourceId = table.IdOf(c);
                 if (!result.ContainsNode(sourceId)) result.AddNode(table.CreateComponentNode(c, Id));
                 SerializedReferenceScanner.EmitEdges(result, table, c, sourceId, refs, Id);
@@ -176,7 +193,7 @@ namespace UnityNetworkViewer.Editor
                 if (!string.IsNullOrEmpty(n.AssetGuid) && n.AssetGuid != table.AssetGuid && n.AssetGuid != table.SceneGuid)
                     result.DependencyKeys.Add(n.AssetGuid);
             }
-            return result;
+            yield break;
         }
     }
 
@@ -184,7 +201,7 @@ namespace UnityNetworkViewer.Editor
     /// Prefab Instance → Source、Prefab Variant → Base、Nested Prefab、Override の有無。
     /// Instance と Asset 側のオブジェクトは別ノードとして扱う。
     /// </summary>
-    public sealed class PrefabProvider : IAnalysisProvider
+    public sealed class PrefabProvider : IAnalysisProvider, IIncrementalAnalysisProvider
     {
         public string Id => ProviderIds.Prefab;
         public int Version => 1;
@@ -195,8 +212,14 @@ namespace UnityNetworkViewer.Editor
         public AnalysisResult Analyze(AnalysisTarget target, AnalysisContext context)
         {
             var result = new AnalysisResult(Id);
+            foreach (var step in AnalyzeIncrementally(target, context, result)) { }
+            return result;
+        }
+
+        public IEnumerable<int> AnalyzeIncrementally(AnalysisTarget target, AnalysisContext context, AnalysisResult result)
+        {
             var table = context.GetTable(target);
-            if (!table.IsValid) return result;
+            if (!table.IsValid) yield break;
 
             if (table.IsPrefabAsset && table.PrefabRoot != null)
             {
@@ -229,6 +252,8 @@ namespace UnityNetworkViewer.Editor
 
             foreach (var go in table.GameObjects)
             {
+                yield return 0;
+                if (go == null) continue;
                 if (!PrefabUtility.IsPartOfPrefabInstance(go)) continue;
                 // Variant のルート自身は PrefabVariant で表現済み
                 if (table.IsPrefabAsset && go == table.PrefabRoot) continue;
@@ -273,7 +298,7 @@ namespace UnityNetworkViewer.Editor
                 }
                 result.AddEdge(edge);
             }
-            return result;
+            yield break;
         }
 
         static void AnnotateOverrides(GameObject instanceRoot, GraphEdge edge, AnalysisResult result, ObjectTable table)
