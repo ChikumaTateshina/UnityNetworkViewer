@@ -31,7 +31,7 @@ namespace UnityNetworkViewer.Editor
         static readonly Dictionary<string, Preparation> Preparations = new Dictionary<string, Preparation>(StringComparer.Ordinal);
 
         public string Id => ProviderIds.UnloadedScene;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 0;
         public IEnumerable<string> AssetSearchFilters => new[] { "t:Scene" };
 
@@ -339,7 +339,7 @@ namespace UnityNetworkViewer.Editor
                     }
                     else
                     {
-                        node.Name = scriptName;
+                        node.Name = ProgramDisplayName(o) ?? scriptName;
                         string scriptId = NodeIds.Asset(script.Guid);
                         if (!_r.ContainsNode(scriptId))
                             _r.AddNode(new GraphNode { Id = scriptId, Kind = NodeKind.ScriptAsset, Name = scriptName, AssetGuid = script.Guid, AssetPath = AssetDatabase.GUIDToAssetPath(script.Guid), Flags = NodeFlags.Placeholder, ProviderId = _p.Id });
@@ -484,6 +484,14 @@ namespace UnityNetworkViewer.Editor
                 return id;
             }
 
+            /// <summary>UdonBehaviour などプログラム Asset を持つ Component は、そのプログラム名で表示する。</summary>
+            static string ProgramDisplayName(UnityYamlObject o)
+            {
+                if (!o.TryGetReference("programSource", out var program) || string.IsNullOrEmpty(program.Guid)) return null;
+                string path = AssetDatabase.GUIDToAssetPath(program.Guid);
+                return string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path);
+            }
+
             string ScriptName(string guid)
             {
                 if (_scriptNames.TryGetValue(guid, out var n)) return n;
@@ -550,7 +558,7 @@ namespace UnityNetworkViewer.Editor
                     {
                         Id = id,
                         Kind = entry.IsGameObject ? NodeKind.GameObject : NodeKind.Component,
-                        Name = entry.IsGameObject && names.TryGetValue(entry.LocalId, out var nm) ? nm : (entry.ScriptName ?? entry.Name),
+                        Name = entry.IsGameObject && names.TryGetValue(entry.LocalId, out var nm) ? nm : (entry.Name ?? entry.ScriptName),
                         TypeName = entry.TypeName,
                         SceneGuid = _sceneGuid,
                         LocalFileId = entry.LocalId,

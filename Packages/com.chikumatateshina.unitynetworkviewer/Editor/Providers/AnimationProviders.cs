@@ -165,7 +165,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class AnimationAssetProvider : IAnalysisProvider, IIncrementalAnalysisProvider, IAssetDiscoveryProvider
     {
         public string Id => ProviderIds.Animation;
-        public int Version => 2;
+        public int Version => 3;
         public int Order => 40;
         public IEnumerable<string> AssetSearchFilters => new[] { "t:AnimatorController", "t:AnimatorOverrideController", "t:AnimationClip" };
 
@@ -294,7 +294,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class AnimatorBindingProvider : IAnalysisProvider, IIncrementalAnalysisProvider
     {
         public string Id => ProviderIds.AnimatorBinding;
-        public int Version => 2;
+        public int Version => 3;
         public int Order => 41;
         const int MaxBindingsPerAnimator = 4000;
         const int BindingsPerStep = 64;

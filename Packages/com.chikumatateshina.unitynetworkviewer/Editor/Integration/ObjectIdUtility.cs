@@ -233,7 +233,7 @@ namespace UnityNetworkViewer.Editor
                 if (!AssetDatabase.IsMainAsset(obj))
                 {
                     var main = AssetDatabase.LoadMainAssetAtPath(path);
-                    if (main != null && obj is Component comp) node.Name = comp.gameObject.name + " · " + comp.GetType().Name;
+                    if (main != null && obj is Component comp) node.Name = comp.gameObject.name + " · " + ComponentNaming.DisplayName(comp);
                     else if (main != null && main != obj && !(obj is GameObject)) node.HierarchyPath = main.name + "/" + obj.name;
                     node.Flags |= NodeFlags.PrefabAssetContent;
                 }
@@ -245,7 +245,7 @@ namespace UnityNetworkViewer.Editor
                 {
                     node.SceneGuid = GetSceneGuid(go.scene);
                     node.HierarchyPath = GetHierarchyPath(go.transform);
-                    if (obj is Component c) node.Name = c.GetType().Name;
+                    if (obj is Component c) node.Name = ComponentNaming.DisplayName(c);
                 }
                 if (NodeIds.IsSession(id)) node.Flags |= NodeFlags.Transient;
             }

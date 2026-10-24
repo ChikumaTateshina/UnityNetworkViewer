@@ -234,6 +234,16 @@ public class DoorController : UdonSharpBehaviour
 
             // Udon 内部表現（publicVariablesUnityEngineObjects）を名前なしの SerializedReference として重複させない
             Assert.IsFalse(outEdges.Any(e => e.Kind == EdgeKind.SerializedReference && e.TargetId == doorId));
+
+            // UdonBehaviour は型名ではなくプログラム名で表示する（ロード済み・未ロードの両方）
+            Assert.AreEqual("DoorGraph", store.GetNode(ubId).Name);
+            StringAssert.EndsWith("/DoorGraph", store.GetNode(ubId).HierarchyPath);
+            string scenePath = Folder + "/Udon.unity";
+            EditorSceneManager.SaveScene(SceneManager.GetActiveScene(), scenePath);
+            string savedUbId = ObjectIdUtility.GetId(ub);
+            var unloaded = ProviderRegistry.Get(ProviderIds.UnloadedScene)
+                .Analyze(AnalysisTarget.ForUnloadedScene(AssetDatabase.AssetPathToGUID(scenePath), scenePath), context);
+            Assert.AreEqual("DoorGraph", unloaded.GetNode(savedUbId)?.Name, "未ロード索引でもプログラム名");
         }
     }
 }

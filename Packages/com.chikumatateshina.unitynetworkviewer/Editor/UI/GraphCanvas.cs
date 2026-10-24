@@ -1045,16 +1045,56 @@ namespace UnityNetworkViewer.Editor.UI
         {
             string name = Escape(Truncate(node.Name ?? node.Id, 40));
             string extra = "";
+            if (node.Kind == NodeKind.GameObject)
+            {
+                // 付いている Udon（UdonBehaviour のプログラム名）を名前の横に出す
+                string udon = UdonNames(id);
+                if (udon != null) extra += $" <color={GraphStyles.ToHtml(GraphStyles.Outgoing)}>{Escape(udon)}</color>";
+            }
             if (_vm.Highlight.TruncatedNeighbors.TryGetValue(id, out int more) && more > 0) extra += $" <color=#f0a040>+{more}</color>";
             if (_vm.CollapsedCounts.TryGetValue(id, out int hidden) && hidden > 0) extra += $" <color=#a0a0ff>[+{hidden}]</color>";
             if (!twoLines) return "<b>" + name + "</b>" + extra;
             string sub = GraphStyles.KindBadge(node.Kind);
             if (!string.IsNullOrEmpty(node.TypeName) && node.Kind != NodeKind.GameObject) sub += " · " + Escape(Truncate(ShortType(node.TypeName), 26));
+            if (node.Kind == NodeKind.Component)
+            {
+                string owner = OwnerName(node);
+                if (owner != null) sub += " · " + Escape(Truncate(owner, 24));
+            }
             if (node.IsUnloaded) sub += " · 未ロード";
             if (node.HasFlag(NodeFlags.Inactive)) sub += " · 無効";
             if (node.HasFlag(NodeFlags.Missing)) sub += " · Missing";
             if (node.HasFlag(NodeFlags.PrefabInstanceRoot)) sub += " · Instance";
             return $"<b>{name}</b>{extra}\n<size=85%><color={GraphStyles.ToHtml(GraphStyles.SubText)}>{sub}</color></size>";
+        }
+
+        /// <summary>GameObject に付いている UdonBehaviour のプログラム名（最大 2 件）。</summary>
+        string UdonNames(string goId)
+        {
+            List<string> names = null;
+            int count = 0;
+            foreach (var e in _vm.Store.GetOutEdges(goId))
+            {
+                if (e.Kind != EdgeKind.OwnsComponent) continue;
+                var c = _vm.Store.GetNode(e.TargetId);
+                if (c == null || c.TypeName == null || !c.TypeName.EndsWith("UdonBehaviour", StringComparison.Ordinal)) continue;
+                count++;
+                if (names == null) names = new List<string>();
+                if (names.Count < 2) names.Add(c.Name);
+            }
+            if (names == null) return null;
+            return "[" + string.Join(", ", names) + (count > names.Count ? $" +{count - names.Count}" : "") + "]";
+        }
+
+        /// <summary>Component が付いている GameObject の名前（階層パスの最後から 2 番目）。</summary>
+        static string OwnerName(GraphNode node)
+        {
+            var path = node.HierarchyPath;
+            if (string.IsNullOrEmpty(path)) return null;
+            int last = path.LastIndexOf('/');
+            if (last <= 0) return null;
+            int prev = path.LastIndexOf('/', last - 1);
+            return path.Substring(prev + 1, last - prev - 1);
         }
 
         static string ShortType(string t)

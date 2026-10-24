@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0] - 2026-10-25
+
+### Changed
+- UdonBehaviour のノードを型名（UdonBehaviour）ではなく Udon の名前で表示するようにした。UdonSharp はソースのクラス名、Udon Graph などはプログラム Asset 名。
+  ロード済み Scene・Prefab・未ロード Scene（programSource の Asset 名）・仮ノードのいずれでも同じ名前になり、`name:` 検索や階層パスにも使われる。
+- GameObject のノードに、付いている Udon の名前を `[DoorController, Lamp +1]` のように併記する。Component のノードは 2 行目に付いている GameObject 名を表示する。
+- 表示名の決定を `ComponentNaming` に集約し、連携アセンブリから解決関数を登録できるようにした（VRChat 連携が UdonBehaviour 用を登録）。
+- 名前の変更に伴い、関係する Provider の版を上げた（キャッシュの該当部分は自動で再解析される）。
+
 ## [0.6.0] - 2026-10-25
 
 ### Added

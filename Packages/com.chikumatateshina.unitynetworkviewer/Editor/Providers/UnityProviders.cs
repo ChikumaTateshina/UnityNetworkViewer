@@ -21,7 +21,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class SceneHierarchyProvider : IAnalysisProvider, IIncrementalAnalysisProvider, IAssetDiscoveryProvider
     {
         public string Id => ProviderIds.Hierarchy;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 0;
         public IEnumerable<string> AssetSearchFilters => new[] { "t:Prefab" };
 
@@ -134,7 +134,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class SerializedReferenceProvider : IAnalysisProvider, IIncrementalAnalysisProvider
     {
         public string Id => ProviderIds.Serialized;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 10;
 
         public bool CanAnalyze(AnalysisTarget target) => TargetFilters.IsHierarchyTarget(target);
@@ -204,7 +204,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class PrefabProvider : IAnalysisProvider, IIncrementalAnalysisProvider
     {
         public string Id => ProviderIds.Prefab;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 20;
 
         public bool CanAnalyze(AnalysisTarget target) => TargetFilters.IsHierarchyTarget(target);
@@ -355,7 +355,7 @@ namespace UnityNetworkViewer.Editor
     public sealed class ScriptableAssetProvider : IAnalysisProvider, IAssetDiscoveryProvider
     {
         public string Id => ProviderIds.ScriptableAsset;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 30;
         public IEnumerable<string> AssetSearchFilters => new[] { "t:ScriptableObject" };
 

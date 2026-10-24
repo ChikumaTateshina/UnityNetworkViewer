@@ -283,12 +283,12 @@ namespace UnityNetworkViewer.Editor
             {
                 Id = id,
                 Kind = NodeKind.Component,
-                Name = c.GetType().Name,
+                Name = ComponentNaming.DisplayName(c),
                 TypeName = c.GetType().FullName,
                 SceneGuid = SceneGuid,
                 AssetGuid = AssetGuid,
                 AssetPath = AssetPath,
-                HierarchyPath = PathOf(c.gameObject) + "/" + c.GetType().Name,
+                HierarchyPath = PathOf(c.gameObject) + "/" + ComponentNaming.DisplayName(c),
                 ProviderId = providerId,
             };
             if ((c.hideFlags & HideFlags.HideInInspector) != 0) node.Flags |= NodeFlags.Hidden;
@@ -315,10 +315,10 @@ namespace UnityNetworkViewer.Editor
                 {
                     Id = id,
                     Kind = obj is GameObject ? NodeKind.GameObject : NodeKind.Component,
-                    Name = obj is Component comp ? comp.GetType().Name : owner.name,
+                    Name = obj is Component comp ? ComponentNaming.DisplayName(comp) : owner.name,
                     TypeName = obj.GetType().Name,
                     SceneGuid = SceneGuid,
-                    HierarchyPath = obj is Component ? PathOf(owner) + "/" + obj.GetType().Name : PathOf(owner),
+                    HierarchyPath = obj is Component oc ? PathOf(owner) + "/" + ComponentNaming.DisplayName(oc) : PathOf(owner),
                     Flags = NodeFlags.Placeholder,
                     ProviderId = providerId,
                 };

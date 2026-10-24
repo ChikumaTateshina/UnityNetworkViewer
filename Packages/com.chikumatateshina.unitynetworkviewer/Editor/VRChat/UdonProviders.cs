@@ -18,6 +18,25 @@ namespace UnityNetworkViewer.Editor.VRChat
         public const string ControlBinding = "vrchat.udonControl";
     }
 
+    /// <summary>UdonBehaviour をプログラム名（UdonSharp のクラス名 / Udon Graph のプログラム名）で表示する。</summary>
+    [InitializeOnLoad]
+    internal static class UdonComponentNaming
+    {
+        static UdonComponentNaming()
+        {
+            ComponentNaming.Register(Resolve);
+        }
+
+        static string Resolve(Component c)
+        {
+            if (!(c is UdonBehaviour ub)) return null;
+            var program = ub.programSource;
+            if (program == null) return "UdonBehaviour (Program なし)";
+            if (program is UdonSharpProgramAsset sharp && sharp.sourceCsScript != null) return sharp.sourceCsScript.name;
+            return program.name;
+        }
+    }
+
     internal static class UdonUtil
     {
         public static bool IsHierarchyTarget(AnalysisTarget t)
@@ -74,7 +93,7 @@ namespace UnityNetworkViewer.Editor.VRChat
     public sealed class UdonBehaviourProvider : IAnalysisProvider
     {
         public string Id => UdonProviderIds.Behaviour;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 50;
 
         public bool CanAnalyze(AnalysisTarget target) => UdonUtil.IsHierarchyTarget(target);
@@ -379,7 +398,7 @@ namespace UnityNetworkViewer.Editor.VRChat
     public sealed class UdonControlBindingProvider : IAnalysisProvider
     {
         public string Id => UdonProviderIds.ControlBinding;
-        public int Version => 1;
+        public int Version => 2;
         public int Order => 60;
 
         public bool CanAnalyze(AnalysisTarget target) => UdonUtil.IsHierarchyTarget(target);

@@ -29,7 +29,7 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
    ```
    https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
    ```
-   （特定の版に固定する場合は末尾に `#v0.6.0` などを付けます）
+   （特定の版に固定する場合は末尾に `#v0.7.0` などを付けます）
 3. **手動**: Release の zip をプロジェクトの `Packages/com.chikumatateshina.unitynetworkviewer/` に展開
 
 ## 使い方
@@ -57,6 +57,8 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
   親から Scene ルートまでの祖先、含まれている Prefab（Instance のルートと元の Prefab Asset）、
   その GameObject と Component（Transform など）を参照しているオブジェクトとその GameObject。
   左パネルの「選択の文脈も表示」で切り替えられます。選択時に解析中だった周辺は、解析が終わると表示に加わります。
+- UdonBehaviour は型名ではなく Udon の名前（UdonSharp のクラス名 / Udon Graph のプログラム名）で表示し、2 行目に付いている GameObject 名を出します。
+  GameObject のノードには、付いている Udon の名前を `[DoorController, …]` のように併記します（未ロード Scene・Prefab 内も同様）。
 - **Follow selection** を OFF にすると表示を固定します。**Focus selection** が ON の時だけ自動でパンします（ズームは維持）。
 - グラフ上のクリックは Unity の Selection に反映されます（ループしないよう再入を抑止）。ダブルクリックで Ping / Frame。
   未ロード Scene のノードは確認ダイアログで「追加で開く / 置き換えて開く」を選んだ場合のみ開きます。

@@ -1,7 +1,7 @@
 {
   "name": "com.chikumatateshina.unitynetworkviewer",
   "displayName": "UnityNetworkViewer",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "unity": "2022.3",
   "description": "Editor-only explorer that indexes Scene / GameObject / Component / Prefab / Asset / Udon relationships as a typed directed multigraph and visualizes them with selection-synchronized highlighting.",
   "documentationUrl": "https://github.com/ChikumaTateshina/UnityNetworkViewer/blob/main/Packages/com.chikumatateshina.unitynetworkviewer/README.md",

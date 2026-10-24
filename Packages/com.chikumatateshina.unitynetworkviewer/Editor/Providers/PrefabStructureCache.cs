@@ -133,10 +133,10 @@ namespace UnityNetworkViewer.Editor
                     {
                         LocalId = cid,
                         IsGameObject = false,
-                        Name = c.GetType().Name,
+                        Name = ComponentNaming.DisplayName(c),
                         TypeName = c.GetType().FullName,
                         GameObjectLocalId = goId,
-                        RelativePath = entry.RelativePath + "/" + c.GetType().Name,
+                        RelativePath = entry.RelativePath + "/" + ComponentNaming.DisplayName(c),
                     };
                     if (c is MonoBehaviour mb)
                     {
