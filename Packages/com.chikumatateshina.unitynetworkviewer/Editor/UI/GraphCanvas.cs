@@ -452,6 +452,8 @@ namespace UnityNetworkViewer.Editor.UI
             }
 
             var lineBatches = new Dictionary<StyleKey, List<List<Vector2>>>();
+            // 破線を作る範囲（生成範囲の画面座標）
+            var screenClip = new Rect(GenToScreen(cull.min), cull.size * Zoom);
             var arrowBatches = new Dictionary<Color, List<Vector2>>();
             var halfSize = new Vector2(GraphStyles.NodeWidth, GraphStyles.NodeHeight) * 0.5f * Zoom;
             var highlightedLast = new List<string>();
@@ -459,7 +461,7 @@ namespace UnityNetworkViewer.Editor.UI
             void EmitEdge(GraphEdge e)
             {
                 if (!_vm.Positions.TryGetValue(e.SourceId, out var ws) || !_vm.Positions.TryGetValue(e.TargetId, out var wt)) return;
-                if (e.SourceId == e.TargetId) return;
+                if (e.SourceId == e.TargetId || !IsFinite(ws) || !IsFinite(wt)) return;
                 if (!cull.Overlaps(Rect.MinMaxRect(Mathf.Min(ws.x, wt.x), Mathf.Min(ws.y, wt.y), Mathf.Max(ws.x, wt.x), Mathf.Max(ws.y, wt.y)))) return;
 
                 string key = PairKey(e);
@@ -474,7 +476,7 @@ namespace UnityNetworkViewer.Editor.UI
                 if (!lineBatches.TryGetValue(sk, out var list)) lineBatches[sk] = list = new List<List<Vector2>>();
                 var dash = GraphStyles.DashPattern(e.Evidence);
                 if (dash == Vector2.zero) list.Add(pts);
-                else DashPolyline(pts, dash.x * Mathf.Clamp(Zoom, 0.6f, 1.5f), dash.y * Mathf.Clamp(Zoom, 0.6f, 1.5f), list);
+                else DashPolyline(pts, dash.x * Mathf.Clamp(Zoom, 0.6f, 1.5f), dash.y * Mathf.Clamp(Zoom, 0.6f, 1.5f), list, screenClip);
 
                 if (Zoom > 0.25f)
                 {
@@ -814,25 +816,73 @@ namespace UnityNetworkViewer.Editor.UI
             return pts;
         }
 
-        static void DashPolyline(List<Vector2> pts, float dash, float gap, List<List<Vector2>> output)
+        /// <summary>1 本の折れ線から作る破線の区切りの上限（超えた分は実線で描く）。</summary>
+        const int MaxDashesPerLine = 2000;
+
+        static bool IsFinite(Vector2 v) => !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsInfinity(v.x) && !float.IsInfinity(v.y);
+
+        /// <summary>
+        /// 折れ線を破線に分ける。clip を指定した場合は範囲外の部分を作らない（拡大時の非常に長い線で区切りが膨大にならないように）。
+        /// パターン内の位置は 1 周期の範囲に保ち、浮動小数点の精度に関係なく必ず先へ進む。
+        /// </summary>
+        internal static void DashPolyline(List<Vector2> pts, float dash, float gap, List<List<Vector2>> output, Rect? clip = null)
         {
+            if (!(dash > 0.01f) || !(gap >= 0f) || float.IsInfinity(dash) || float.IsInfinity(gap))
+            {
+                output.Add(new List<Vector2>(pts));
+                return;
+            }
             float pattern = dash + gap;
-            float pos = 0f;
+            float phase = 0f;
+            int budget = MaxDashesPerLine;
             List<Vector2> current = null;
             for (int i = 0; i + 1 < pts.Count; i++)
             {
                 var a = pts[i];
                 var b = pts[i + 1];
+                if (!IsFinite(a) || !IsFinite(b))
+                {
+                    current = null;
+                    continue;
+                }
+                float full = Vector2.Distance(a, b);
+                if (full < 1e-3f) continue;
+                if (clip.HasValue)
+                {
+                    // 範囲外の部分はパターンの位置だけ進めて飛ばす
+                    if (!ClipSegment(clip.Value, a, b, out float t0, out float t1))
+                    {
+                        phase = Mathf.Repeat(phase + full, pattern);
+                        current = null;
+                        continue;
+                    }
+                    var dirFull = (b - a) / full;
+                    if (t0 > 0f)
+                    {
+                        phase = Mathf.Repeat(phase + full * t0, pattern);
+                        current = null;
+                    }
+                    var na = a + dirFull * (full * t0);
+                    var nb = a + dirFull * (full * t1);
+                    a = na;
+                    b = nb;
+                }
                 float len = Vector2.Distance(a, b);
                 if (len < 1e-3f) continue;
                 var dir = (b - a) / len;
                 float t = 0f;
                 while (t < len)
                 {
-                    float phase = pos % pattern;
+                    if (--budget < 0)
+                    {
+                        // 区切りが多すぎる場合、残りは実線にする
+                        output.Add(new List<Vector2> { a + dir * t, b });
+                        current = null;
+                        break;
+                    }
                     bool on = phase < dash;
                     float remain = on ? dash - phase : pattern - phase;
-                    float step = Mathf.Min(remain, len - t);
+                    float step = Mathf.Min(Mathf.Max(remain, 1e-3f), len - t);
                     var p0 = a + dir * t;
                     var p1 = a + dir * (t + step);
                     if (on)
@@ -849,9 +899,32 @@ namespace UnityNetworkViewer.Editor.UI
                         current = null;
                     }
                     t += step;
-                    pos += step;
+                    phase += step;
+                    if (phase >= pattern - 1e-4f) phase = 0f;
                 }
             }
+        }
+
+        /// <summary>線分 a→b を矩形で切り取る（Liang–Barsky）。t0/t1 は線分上の位置（0〜1）。</summary>
+        static bool ClipSegment(Rect r, Vector2 a, Vector2 b, out float t0, out float t1)
+        {
+            t0 = 0f;
+            t1 = 1f;
+            var d = b - a;
+            float[] p = { -d.x, d.x, -d.y, d.y };
+            float[] q = { a.x - r.xMin, r.xMax - a.x, a.y - r.yMin, r.yMax - a.y };
+            for (int i = 0; i < 4; i++)
+            {
+                if (Mathf.Approximately(p[i], 0f))
+                {
+                    if (q[i] < 0f) return false;
+                    continue;
+                }
+                float u = q[i] / p[i];
+                if (p[i] < 0f) { if (u > t1) return false; if (u > t0) t0 = u; }
+                else { if (u < t0) return false; if (u < t1) t1 = u; }
+            }
+            return t1 > t0;
         }
 
         static void AddArrow(List<Vector2> tris, Vector2 from, Vector2 tip, float size)
@@ -1230,6 +1303,7 @@ namespace UnityNetworkViewer.Editor.UI
             style.borderTopWidth = style.borderBottomWidth = style.borderLeftWidth = style.borderRightWidth = 1;
             style.borderTopColor = style.borderBottomColor = style.borderLeftColor = style.borderRightColor = new Color(1, 1, 1, 0.15f);
             generateVisualContent += Draw;
+            RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             RegisterCallback<PointerDownEvent>(e => { _dragging = true; this.CapturePointer(e.pointerId); MoveTo(e.localPosition); e.StopPropagation(); });
             RegisterCallback<PointerMoveEvent>(e => { if (_dragging) { MoveTo(e.localPosition); e.StopPropagation(); } });
             RegisterCallback<PointerUpEvent>(e => { _dragging = false; this.ReleasePointer(e.pointerId); e.StopPropagation(); });
@@ -1238,15 +1312,54 @@ namespace UnityNetworkViewer.Editor.UI
 
         public void Bind(GraphViewModel vm) => _vm = vm;
 
-        /// <summary>キャンバスの表示が変わった。内容が変わったときだけノードを描き直す。</summary>
+        /// <summary>
+        /// キャンバスの表示が変わった。内容が変わったときだけ範囲を計算してノードを描き直す。
+        /// スタイルの変更（表示範囲の枠）は generateVisualContent の外で行う必要がある。
+        /// </summary>
         public void OnViewChanged(bool contentChanged)
         {
-            if (contentChanged || _scale <= 0) MarkDirtyRepaint();
+            if (contentChanged || _scale <= 0)
+            {
+                ComputeBounds();
+                MarkDirtyRepaint();
+            }
             UpdateViewRect();
+        }
+
+        void OnGeometryChanged(GeometryChangedEvent evt)
+        {
+            ComputeBounds();
+            MarkDirtyRepaint();
+            UpdateViewRect();
+        }
+
+        void ComputeBounds()
+        {
+            _scale = 0f;
+            if (_vm == null) return;
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+            foreach (var id in _vm.GetDrawnNodes())
+            {
+                if (!_vm.Positions.TryGetValue(id, out var p) || float.IsNaN(p.x) || float.IsNaN(p.y)) continue;
+                minX = Mathf.Min(minX, p.x); maxX = Mathf.Max(maxX, p.x);
+                minY = Mathf.Min(minY, p.y); maxY = Mathf.Max(maxY, p.y);
+            }
+            var size = contentRect.size - new Vector2(8, 8);
+            if (minX > maxX || size.x <= 0 || size.y <= 0) return;
+            // 範囲はノードのみ（表示範囲を含めるとパンのたびに縮尺が変わり描き直しが必要になる）
+            float pad = GraphStyles.NodeWidth;
+            _worldBounds = Rect.MinMaxRect(minX - pad, minY - pad, maxX + pad, maxY + pad);
+            _scale = Mathf.Min(size.x / Mathf.Max(_worldBounds.width, 1f), size.y / Mathf.Max(_worldBounds.height, 1f));
+            _offset = new Vector2(4, 4) + (size - _worldBounds.size * _scale) * 0.5f;
         }
 
         void UpdateViewRect()
         {
+            if (_scale <= 0)
+            {
+                _viewRect.style.display = DisplayStyle.None;
+                return;
+            }
             var view = _canvas.WorldViewport;
             var size = contentRect.size;
             var vmin = (view.min - _worldBounds.min) * _scale + _offset;
@@ -1272,26 +1385,12 @@ namespace UnityNetworkViewer.Editor.UI
             _canvas.CenterOn(world);
         }
 
+        /// <summary>ノードの点を描く（範囲は <see cref="ComputeBounds"/> で計算済み。ここではスタイルを変更しない）。</summary>
         void Draw(MeshGenerationContext mgc)
         {
-            if (_vm == null) return;
+            if (_vm == null || _scale <= 0) return;
             var ids = _vm.GetDrawnNodes();
             if (ids.Count == 0) return;
-            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
-            foreach (var id in ids)
-            {
-                if (!_vm.Positions.TryGetValue(id, out var p)) continue;
-                minX = Mathf.Min(minX, p.x); maxX = Mathf.Max(maxX, p.x);
-                minY = Mathf.Min(minY, p.y); maxY = Mathf.Max(maxY, p.y);
-            }
-            if (minX > maxX) return;
-            // 範囲はノードのみ（表示範囲を含めるとパンのたびに縮尺が変わり描き直しが必要になる）
-            float pad = GraphStyles.NodeWidth;
-            _worldBounds = Rect.MinMaxRect(minX - pad, minY - pad, maxX + pad, maxY + pad);
-            var size = contentRect.size - new Vector2(8, 8);
-            _scale = Mathf.Min(size.x / Mathf.Max(_worldBounds.width, 1f), size.y / Mathf.Max(_worldBounds.height, 1f));
-            _offset = new Vector2(4, 4) + (size - _worldBounds.size * _scale) * 0.5f;
-
             var p2 = mgc.painter2D;
             foreach (var id in ids)
             {
@@ -1307,7 +1406,6 @@ namespace UnityNetworkViewer.Editor.UI
                 p2.ClosePath();
                 p2.Fill();
             }
-            UpdateViewRect();
         }
     }
 

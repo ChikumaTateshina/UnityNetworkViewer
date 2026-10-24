@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1] - 2026-10-25
+
+### Fixed
+- 拡大表示で推定・未解決（破線）のエッジを描くと、破線の区切りの計算が終わらずメモリを使い切り（OutOfMemoryException）、エディタが応答しなくなる不具合を修正。
+  破線は描画範囲で切り取ってから作り、パターン内の位置を 1 周期の範囲に保って必ず先へ進むようにし、1 本あたりの区切りに上限を設けた。座標が NaN・無限大のエッジは描かない。
+- ミニマップの描画中にスタイルを変更していたため発生していた InvalidOperationException（"VisualElements cannot be marked for dirty repaint ... during generateVisualContent"）を修正。
+
+### Added
+- 破線生成の回帰テスト（非常に長い線・大きな座標・NaN）。
+
 ## [0.5.0] - 2026-10-25
 
 ### Changed（Animation とズームの応答性）

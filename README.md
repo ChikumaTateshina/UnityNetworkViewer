@@ -43,7 +43,7 @@ Window → Package Manager → 「+」→ **Add package from git URL…** に次
 https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
 ```
 
-特定の版に固定する場合は、末尾に `#v0.5.0` のようにタグを付けます。
+特定の版に固定する場合は、末尾に `#v0.5.1` のようにタグを付けます。
 
 ### 手動
 
