@@ -29,7 +29,7 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
    ```
    https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
    ```
-   （特定の版に固定する場合は末尾に `#v0.5.1` などを付けます）
+   （特定の版に固定する場合は末尾に `#v0.6.0` などを付けます）
 3. **手動**: Release の zip をプロジェクトの `Packages/com.chikumatateshina.unitynetworkviewer/` に展開
 
 ## 使い方
@@ -53,6 +53,10 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
 
 - Hierarchy / Scene View / Project で選択すると、選択ノードを太枠、参照元を橙、参照先を青緑、親子を中立色、Prefab 関係を紫で表示します。
   2 ホップ目以降は段階的に薄くなります。色だけでなく **線種（確度）・矢印（方向）・略号ラベル** でも区別できます。
+- GameObject（または Component）を選ぶと、深さの設定とは別に「選択の文脈」も表示します:
+  親から Scene ルートまでの祖先、含まれている Prefab（Instance のルートと元の Prefab Asset）、
+  その GameObject と Component（Transform など）を参照しているオブジェクトとその GameObject。
+  左パネルの「選択の文脈も表示」で切り替えられます。選択時に解析中だった周辺は、解析が終わると表示に加わります。
 - **Follow selection** を OFF にすると表示を固定します。**Focus selection** が ON の時だけ自動でパンします（ズームは維持）。
 - グラフ上のクリックは Unity の Selection に反映されます（ループしないよう再入を抑止）。ダブルクリックで Ping / Frame。
   未ロード Scene のノードは確認ダイアログで「追加で開く / 置き換えて開く」を選んだ場合のみ開きます。

@@ -85,6 +85,7 @@ namespace UnityNetworkViewer.Editor.UI
             AddToggle(sync, "Graph → Unity 選択", () => S.syncGraphToUnity, v => S.syncGraphToUnity = v, false,
                 "グラフ上のクリックを Unity の Selection に反映します（未ロード Scene は開きません）");
             AddToggle(sync, "選択 GameObject の Component も起点にする", () => S.includeComponents, v => S.includeComponents = v, true);
+            AddToggle(sync, "選択の文脈も表示（祖先・所属 Prefab・参照元）", () => S.showSelectionContext, v => S.showSelectionContext = v, true);
             AddEnum(sync, "複数選択", () => S.setMode, v => S.setMode = v, true, "Union: 和集合 / Intersection: 共通の参照元・参照先のみ");
             AddEnum(sync, "表示外の選択", () => S.newSelection, v => S.newSelection = v, false,
                 "ReplaceView: 表示を置換 / AddToView: 追加 / KeepViewAndNotify: 維持して通知");

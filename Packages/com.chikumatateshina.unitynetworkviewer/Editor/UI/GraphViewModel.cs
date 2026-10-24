@@ -57,6 +57,11 @@ namespace UnityNetworkViewer.Editor.UI
         public bool followSelection = true;
         public bool focusSelection = true;
         public bool includeComponents;
+        /// <summary>
+        /// GameObject / Component を選択したとき、深さの設定とは別に「選択の文脈」（祖先・所属 Prefab・
+        /// GameObject と Component を参照しているオブジェクト）も表示する。
+        /// </summary>
+        public bool showSelectionContext = true;
         public bool crossScene = true;
         public bool hideUnrelated;
         public bool syncGraphToUnity = true;
@@ -126,6 +131,8 @@ namespace UnityNetworkViewer.Editor.UI
         List<string> _drawnCache;
         long _drawnRevision = -1;
         readonly HashSet<string> _pendingOwners = new HashSet<string>(StringComparer.Ordinal);
+        /// <summary>表示が選択から作られたものか（手動で表示を編集したら false）。索引の更新時に選択の周辺を追加し直すかの判定に使う。</summary>
+        bool _viewFollowsSelection;
         bool _pendingCleared;
         readonly HashSet<string> _viewOwners = new HashSet<string>(StringComparer.Ordinal);
         Task<LayoutResult> _layoutTask;
@@ -318,6 +325,125 @@ namespace UnityNetworkViewer.Editor.UI
             }
             var o = BuildOptions(State.depth, Math.Max(State.maxNodes * 4, 1000));
             Highlight = Query.QueryMulti(Roots, o, State.setMode);
+            AddSelectionContext(Highlight, Math.Max(State.maxNodes * 4, 1000));
+        }
+
+        /// <summary>選択の文脈として 1 本のエッジ分だけ加える上限（参照元が非常に多いオブジェクトで表示が溢れないように）。</summary>
+        const int MaxContextReferrersPerTarget = 50;
+
+        /// <summary>
+        /// 選択した GameObject（Component の場合はその GameObject）の文脈を部分グラフに加える。
+        /// - 祖先（親から Scene ルートまで）と、途中にある Prefab Instance のルートの元 Prefab
+        /// - GameObject とその Component を参照しているオブジェクト（参照元が Component ならその GameObject も）
+        /// 参照は Transform や Component に向いていることが多く、深さ 1 では参照元が表示されないため。
+        /// </summary>
+        void AddSelectionContext(SubgraphResult sub, int maxNodes)
+        {
+            if (!State.showSelectionContext || Roots.Count == 0) return;
+            bool incoming = State.direction != RelationDirection.Outgoing;
+            bool outgoing = State.direction != RelationDirection.Incoming;
+
+            bool Add(string id, string edgeId, EdgeRole role, int depth)
+            {
+                var node = Store.GetNode(id);
+                if (node == null || !NodePassesFilter(node)) return false;
+                if (edgeId != null)
+                {
+                    var e = Store.GetEdge(edgeId);
+                    if (e == null || !EdgePassesFilter(e)) return false;
+                }
+                if (!sub.NodeDepth.ContainsKey(id))
+                {
+                    if (sub.NodeDepth.Count >= maxNodes)
+                    {
+                        sub.Truncated = true;
+                        return false;
+                    }
+                    sub.NodeDepth[id] = depth;
+                }
+                if (edgeId != null && !sub.EdgeRoles.ContainsKey(edgeId)) sub.EdgeRoles[edgeId] = role;
+                return true;
+            }
+
+            string OwnerOf(string componentId)
+            {
+                foreach (var e in Store.GetInEdges(componentId))
+                    if (e.Kind == EdgeKind.OwnsComponent) return e.SourceId;
+                return null;
+            }
+
+            foreach (var root in Roots)
+            {
+                var rootNode = Store.GetNode(root);
+                if (rootNode == null) continue;
+                string go = rootNode.Kind == NodeKind.GameObject ? root : rootNode.Kind == NodeKind.Component ? OwnerOf(root) : null;
+                if (go == null) continue;
+                int baseDepth = go == root ? 0 : 1;
+                if (go != root)
+                {
+                    foreach (var e in Store.GetInEdges(root))
+                        if (e.Kind == EdgeKind.OwnsComponent) { Add(go, e.Id, EdgeRole.Incoming, 1); break; }
+                }
+
+                // 祖先と所属 Prefab
+                string cur = go;
+                int depth = baseDepth;
+                for (int guard = 0; cur != null && guard < 64; guard++)
+                {
+                    var curNode = Store.GetNode(cur);
+                    if (outgoing && curNode != null && (curNode.HasFlag(NodeFlags.PrefabInstanceRoot) || cur == go))
+                    {
+                        foreach (var e in Store.GetOutEdges(cur))
+                            if (e.Kind == EdgeKind.PrefabSource || e.Kind == EdgeKind.PrefabVariant) Add(e.TargetId, e.Id, EdgeRole.Outgoing, depth + 1);
+                    }
+                    if (!incoming) break;
+                    string parent = null, parentEdge = null;
+                    foreach (var e in Store.GetInEdges(cur))
+                    {
+                        if (e.Kind != EdgeKind.ParentChild) continue;
+                        parent = e.SourceId;
+                        parentEdge = e.Id;
+                        break;
+                    }
+                    if (parent == null || !Add(parent, parentEdge, EdgeRole.Incoming, depth + 1)) break;
+                    cur = parent;
+                    depth++;
+                }
+
+                // GameObject とその Component を参照しているオブジェクト
+                if (!incoming) continue;
+                var targets = new List<(string id, int depth)> { (go, baseDepth) };
+                foreach (var e in Store.GetOutEdges(go))
+                    if (e.Kind == EdgeKind.OwnsComponent) targets.Add((e.TargetId, baseDepth + 1));
+                foreach (var (target, targetDepth) in targets)
+                {
+                    int added = 0;
+                    foreach (var e in Store.GetInEdges(target))
+                    {
+                        if (EdgeKindInfo.IsStructural(e.Kind) || EdgeKindInfo.IsPrefabRelation(e.Kind) || e.SourceId == go) continue;
+                        if (added >= MaxContextReferrersPerTarget)
+                        {
+                            sub.Truncated = true;
+                            sub.TruncatedNeighbors.TryGetValue(target, out int more);
+                            sub.TruncatedNeighbors[target] = more + 1;
+                            continue;
+                        }
+                        if (target != go && !sub.NodeDepth.ContainsKey(target)) Add(target, null, EdgeRole.Outgoing, targetDepth);
+                        if (!Add(e.SourceId, e.Id, EdgeRole.Incoming, targetDepth + 1)) continue;
+                        added++;
+                        var src = Store.GetNode(e.SourceId);
+                        if (src != null && src.Kind == NodeKind.Component)
+                        {
+                            foreach (var oe in Store.GetInEdges(e.SourceId))
+                                if (oe.Kind == EdgeKind.OwnsComponent) { Add(oe.SourceId, oe.Id, EdgeRole.Incoming, targetDepth + 2); break; }
+                        }
+                    }
+                    // Component 自体（参照の受け手）と GameObject の所有エッジ
+                    if (target != go && sub.NodeDepth.ContainsKey(target))
+                        foreach (var oe in Store.GetInEdges(target))
+                            if (oe.Kind == EdgeKind.OwnsComponent && oe.SourceId == go && !sub.EdgeRoles.ContainsKey(oe.Id)) sub.EdgeRoles[oe.Id] = EdgeRole.Outgoing;
+                }
+            }
         }
 
         /// <summary>ルートの関連部分グラフで表示集合を作る。戻り値は表示集合が変化したか。</summary>
@@ -325,6 +451,9 @@ namespace UnityNetworkViewer.Editor.UI
         {
             var o = BuildOptions(Math.Max(State.depth, 1), Math.Max(State.maxNodes, 10));
             var sub = Query.QueryMulti(Roots, o, State.setMode);
+            // 文脈は深さの上限とは別枠（maxNodes の 1/2 まで）で加える
+            AddSelectionContext(sub, sub.NodeDepth.Count + Math.Max(State.maxNodes / 2, 10));
+            _viewFollowsSelection = true;
             var next = new HashSet<string>(additive ? Visible : Enumerable.Empty<string>(), StringComparer.Ordinal);
             foreach (var id in sub.NodeDepth.Keys) next.Add(id);
             ViewTruncated = sub.Truncated;
@@ -348,6 +477,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         public void ShowNodes(IEnumerable<string> ids, bool additive, bool select)
         {
+            _viewFollowsSelection = false;
             if (!additive) Visible.Clear();
             var list = ids.Where(Store.ContainsNode).ToList();
             foreach (var id in list) Visible.Add(id);
@@ -403,6 +533,7 @@ namespace UnityNetworkViewer.Editor.UI
         public void RemoveFromView(string id)
         {
             if (!Visible.Remove(id)) return;
+            _viewFollowsSelection = false;
             Pinned.Remove(id);
             Positions.Remove(id);
             Roots.Remove(id);
@@ -413,6 +544,7 @@ namespace UnityNetworkViewer.Editor.UI
 
         public void ClearView()
         {
+            _viewFollowsSelection = false;
             Visible.Clear();
             Positions.Clear();
             Pinned.Clear();
@@ -593,7 +725,12 @@ namespace UnityNetworkViewer.Editor.UI
 
             RecomputeHighlight();
             bool changed = removed > 0;
-            if (hadRoots && rootsNowPresent && rootsWereMissing && State.newSelection != NewSelectionBehavior.KeepViewAndNotify)
+            if (hadRoots && rootsNowPresent && !rootsWereMissing && _viewFollowsSelection && State.newSelection != NewSelectionBehavior.KeepViewAndNotify)
+            {
+                // 選択時にはまだ解析中だった周辺（親・参照元など）が索引されたら、表示に加える
+                changed |= RebuildVisible(true);
+            }
+            else if (hadRoots && rootsNowPresent && rootsWereMissing && State.newSelection != NewSelectionBehavior.KeepViewAndNotify)
             {
                 changed |= RebuildVisible(State.newSelection == NewSelectionBehavior.AddToView);
                 if (Notification != null && Roots.All(Store.ContainsNode)) Notification = null;
