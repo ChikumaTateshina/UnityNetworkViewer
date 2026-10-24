@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityNetworkViewer.Core;
 using UnityEditor;
 using UnityEngine;
@@ -51,8 +52,14 @@ namespace UnityNetworkViewer.Editor.UI
         long _genViewRevision = -1;
         long _genPositionsRevision = -1;
         Vector2 _genSize;
-        bool _zoomGesture;
-        IVisualElementScheduledItem _zoomSettle;
+        bool _gesture;
+        IVisualElementScheduledItem _settle;
+        double _lastRegenerate;
+        /// <summary>これを超えるノード・エッジ数では Painter2D を使わず、頂点を直接作る（角丸・曲線のアンチエイリアスは省く）。</summary>
+        const int FastDrawNodeThreshold = 200;
+        const int FastDrawEdgeThreshold = 400;
+        /// <summary>同時に表示するノードラベルの上限（選択に近いノードを優先）。</summary>
+        const int MaxNodeLabels = 300;
         /// <summary>生成範囲の余白（画面サイズに対する割合）。</summary>
         const float GenerateMargin = 0.5f;
         readonly Dictionary<string, EdgeRole> _nodeRole = new Dictionary<string, EdgeRole>(StringComparer.Ordinal);
@@ -167,18 +174,43 @@ namespace UnityNetworkViewer.Editor.UI
         {
             MarkDirtyRepaint(); // 背景グリッド（軽量）
             bool contentChanged = _vm == null || _genViewRevision != _vm.ViewRevision || _genPositionsRevision != _vm.PositionsRevision;
-            bool zoomChanged = !Mathf.Approximately(_genZoom, Zoom);
             var size = contentRect.size;
-            var delta = Pan - _genPan;
-            bool outOfRange = Mathf.Abs(delta.x) > size.x * GenerateMargin * 0.9f || Mathf.Abs(delta.y) > size.y * GenerateMargin * 0.9f;
-            bool resized = size != _genSize;
-            if (contentChanged || outOfRange || resized || (zoomChanged && !_zoomGesture)) Regenerate();
+            // ウィンドウのサイズ変更中もズームと同様に、止まってから描き直す
+            if (!contentChanged && _genSize != Vector2.zero && size != _genSize) BeginGesture();
+            bool zoomChanged = !Mathf.Approximately(_genZoom, Zoom);
+            bool covered = Covers(GeneratedWorldRect, WorldViewport);
+            double now = EditorApplication.timeSinceStartup;
+            if (contentChanged) Regenerate();
+            else if (_gesture)
+            {
+                // 操作中は変換だけで追従し、描画済みの範囲を外れたときだけ間隔を空けて描き直す
+                if (!covered && now - _lastRegenerate > 0.15) Regenerate();
+                else ApplyLayerTransform();
+            }
+            else if (!covered || zoomChanged || size != _genSize) Regenerate();
             else ApplyLayerTransform();
             MiniMap.OnViewChanged(contentChanged);
         }
 
+        static bool Covers(Rect outer, Rect inner)
+            => outer.xMin <= inner.xMin && outer.yMin <= inner.yMin && outer.xMax >= inner.xMax && outer.yMax >= inner.yMax;
+
+        /// <summary>ズーム・サイズ変更などの連続操作の開始（または継続）。止まって 150ms 後に描き直す。</summary>
+        void BeginGesture()
+        {
+            _gesture = true;
+            if (_settle == null)
+                _settle = schedule.Execute(() =>
+                {
+                    _gesture = false;
+                    Refresh();
+                });
+            _settle.ExecuteLater(150);
+        }
+
         void Regenerate()
         {
+            _lastRegenerate = EditorApplication.timeSinceStartup;
             _genPan = Pan;
             _genZoom = Zoom;
             _genSize = contentRect.size;
@@ -376,6 +408,11 @@ namespace UnityNetworkViewer.Editor.UI
         /// <summary>ノード・エッジ・グループ。生成時のパン/ズーム（_genPan/_genZoom）の画面座標で描く。</summary>
         void Draw(MeshGenerationContext mgc)
         {
+            DrawInner(mgc);
+        }
+
+        void DrawInner(MeshGenerationContext mgc)
+        {
             var p = mgc.painter2D;
             if (_vm == null) return;
             EnsureVisualCache();
@@ -456,6 +493,13 @@ namespace UnityNetworkViewer.Editor.UI
                 EmitEdge(e);
             }
             foreach (var eid in highlightedLast) EmitEdge(_vm.Store.GetEdge(eid));
+
+            var drawnNodes = _vm.GetDrawnNodes();
+            if (drawnNodes.Count > FastDrawNodeThreshold || edges.Count > FastDrawEdgeThreshold)
+            {
+                DrawFast(mgc, lineBatches, arrowBatches, drawnNodes, cull, halfSize, Zoom);
+                return;
+            }
 
             foreach (var kv in lineBatches)
             {
@@ -546,6 +590,139 @@ namespace UnityNetworkViewer.Editor.UI
                     p.Arc(new Vector2(r.xMax - 5, r.yMin + 5), 2.5f, 0f, 360f);
                     p.Fill();
                 }
+            }
+        }
+
+        /// <summary>
+        /// 多数のノード・エッジ向けの描画。Painter2D のパス生成（角丸・線の結合）を使わず、四角形と三角形の頂点を直接作る。
+        /// </summary>
+        void DrawFast(MeshGenerationContext mgc, Dictionary<StyleKey, List<List<Vector2>>> lineBatches, Dictionary<Color, List<Vector2>> arrowBatches,
+            IReadOnlyList<string> drawnNodes, Rect cull, Vector2 halfSize, float zoom)
+        {
+            var mesh = new MeshBuilder(mgc);
+            foreach (var kv in lineBatches)
+            {
+                Color32 c = kv.Key.Color;
+                float w = Mathf.Max(kv.Key.Width, 1f);
+                foreach (var poly in kv.Value)
+                    for (int i = 1; i < poly.Count; i++) mesh.Line(poly[i - 1], poly[i], w, c);
+            }
+            foreach (var kv in arrowBatches)
+            {
+                Color32 c = kv.Key;
+                var tri = kv.Value;
+                for (int i = 0; i + 2 < tri.Count; i += 3) mesh.Triangle(tri[i], tri[i + 1], tri[i + 2], c);
+            }
+
+            // 強調ノードを最後に描く
+            var order = new List<string>(drawnNodes);
+            order.Sort((a, b) => _vm.Highlight.ContainsNode(a).CompareTo(_vm.Highlight.ContainsNode(b)));
+            foreach (var id in order)
+            {
+                if (!_vm.Positions.TryGetValue(id, out var w) || !cull.Contains(w)) continue;
+                var node = _vm.Store.GetNode(id);
+                if (node == null) continue;
+                var center = GenToScreen(w);
+                var r = new Rect(center - halfSize, halfSize * 2f);
+                float alpha = NodeAlpha(id);
+
+                var fill = GraphStyles.NodeFill(node.Kind);
+                fill.a = alpha;
+                mesh.Rect(r, fill);
+                var accent = node.Kind == NodeKind.PrefabAsset || node.HasFlag(NodeFlags.PrefabInstanceRoot) ? GraphStyles.Prefab : GraphStyles.EdgeBase(KindAccentEdge(node.Kind));
+                accent.a = alpha;
+                mesh.Rect(new Rect(r.xMin, r.yMin, 4 * zoom + 1, r.height), accent);
+
+                var border = NodeBorder(id, node, out float bw);
+                border.a *= Mathf.Max(alpha, 0.5f);
+                bw = Mathf.Max(bw, 1f);
+                if (node.IsUnloaded || node.IsPlaceholder)
+                {
+                    var outline = new List<Vector2> { r.min, new Vector2(r.xMax, r.yMin), r.max, new Vector2(r.xMin, r.yMax), r.min };
+                    var dashes = new List<List<Vector2>>();
+                    DashPolyline(outline, 6f, 4f, dashes);
+                    foreach (var d in dashes) mesh.Line(d[0], d[d.Count - 1], bw, border);
+                }
+                else
+                {
+                    mesh.Rect(new Rect(r.xMin, r.yMin, r.width, bw), border);
+                    mesh.Rect(new Rect(r.xMin, r.yMax - bw, r.width, bw), border);
+                    mesh.Rect(new Rect(r.xMin, r.yMin, bw, r.height), border);
+                    mesh.Rect(new Rect(r.xMax - bw, r.yMin, bw, r.height), border);
+                }
+                if (_vm.Pinned.Contains(id) && zoom > 0.35f) mesh.Rect(new Rect(r.xMax - 7, r.yMin + 3, 4, 4), GraphStyles.Selected);
+            }
+            mesh.Flush();
+        }
+
+        /// <summary>頂点・インデックスを直接書き込むメッシュ（1 回の確保は 65,535 頂点まで）。</summary>
+        sealed class MeshBuilder
+        {
+            readonly MeshGenerationContext _mgc;
+            readonly List<Vertex> _vertices = new List<Vertex>(4096);
+            readonly List<ushort> _indices = new List<ushort>(6144);
+            const int MaxVertices = 60000;
+
+            public MeshBuilder(MeshGenerationContext mgc) => _mgc = mgc;
+
+            void Ensure(int vertices)
+            {
+                if (_vertices.Count + vertices > MaxVertices) Flush();
+            }
+
+            void Add(Vector2 p, Color32 c) => _vertices.Add(new Vertex { position = new Vector3(p.x, p.y, Vertex.nearZ), tint = c });
+
+            public void Triangle(Vector2 a, Vector2 b, Vector2 c, Color32 color)
+            {
+                Ensure(3);
+                // UI Toolkit は時計回り（画面座標で y 下向き）の三角形を描く
+                if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) < 0) (b, c) = (c, b);
+                int s = _vertices.Count;
+                Add(a, color);
+                Add(b, color);
+                Add(c, color);
+                _indices.Add((ushort)s);
+                _indices.Add((ushort)(s + 1));
+                _indices.Add((ushort)(s + 2));
+            }
+
+            public void Quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color32 color)
+            {
+                Ensure(4);
+                if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) < 0) (b, d) = (d, b);
+                int s = _vertices.Count;
+                Add(a, color);
+                Add(b, color);
+                Add(c, color);
+                Add(d, color);
+                _indices.Add((ushort)s);
+                _indices.Add((ushort)(s + 1));
+                _indices.Add((ushort)(s + 2));
+                _indices.Add((ushort)s);
+                _indices.Add((ushort)(s + 2));
+                _indices.Add((ushort)(s + 3));
+            }
+
+            public void Rect(Rect r, Color32 color)
+                => Quad(new Vector2(r.xMin, r.yMin), new Vector2(r.xMax, r.yMin), new Vector2(r.xMax, r.yMax), new Vector2(r.xMin, r.yMax), color);
+
+            public void Line(Vector2 p0, Vector2 p1, float width, Color32 color)
+            {
+                var d = p1 - p0;
+                float len = d.magnitude;
+                if (len < 1e-3f) return;
+                var n = new Vector2(-d.y, d.x) / len * (width * 0.5f);
+                Quad(p0 + n, p1 + n, p1 - n, p0 - n, color);
+            }
+
+            public void Flush()
+            {
+                if (_vertices.Count == 0) return;
+                var md = _mgc.Allocate(_vertices.Count, _indices.Count);
+                md.SetAllVertices(_vertices.ToArray());
+                md.SetAllIndices(_indices.ToArray());
+                _vertices.Clear();
+                _indices.Clear();
             }
         }
 
@@ -695,6 +872,11 @@ namespace UnityNetworkViewer.Editor.UI
 
         void SyncLabels()
         {
+            SyncLabelsInner();
+        }
+
+        void SyncLabelsInner()
+        {
             if (_vm == null) return;
             EnsureVisualCache();
             float Zoom = _genZoom; // ラベルも生成時のパン/ズームで配置し、層の移動で追従する
@@ -708,10 +890,30 @@ namespace UnityNetworkViewer.Editor.UI
             if (Zoom >= 0.42f)
             {
                 bool twoLines = Zoom >= 0.7f;
+                var candidates = new List<string>();
                 foreach (var id in _vm.GetDrawnNodes())
                 {
                     if (!_vm.Positions.TryGetValue(id, out var w)) continue;
                     if (w.x + half.x < view.xMin || w.x - half.x > view.xMax || w.y + half.y < view.yMin || w.y - half.y > view.yMax) continue;
+                    candidates.Add(id);
+                }
+                if (candidates.Count > MaxNodeLabels)
+                {
+                    // ラベルが多すぎるとレイアウトと文字描画が重くなるため、選択に近いノード・表示中の範囲を優先する
+                    var screen = WorldViewport;
+                    int Priority(string id)
+                    {
+                        int d = _vm.Highlight.GetDepth(id);
+                        int p = d < 0 ? 100 : d;
+                        var w = _vm.Positions[id];
+                        if (!screen.Contains(w)) p += 50;
+                        return p;
+                    }
+                    candidates = candidates.OrderBy(Priority).Take(MaxNodeLabels).ToList();
+                }
+                foreach (var id in candidates)
+                {
+                    var w = _vm.Positions[id];
                     var node = _vm.Store.GetNode(id);
                     if (node == null) continue;
                     var label = GetLabel(_nodeLabels, used++, true);
@@ -969,14 +1171,7 @@ namespace UnityNetworkViewer.Editor.UI
             Zoom = newZoom;
             Pan = pos - world * Zoom;
             // ホイール操作中は拡大縮小の変換だけで追従し、止まってから描き直す
-            _zoomGesture = true;
-            if (_zoomSettle == null)
-                _zoomSettle = schedule.Execute(() =>
-                {
-                    _zoomGesture = false;
-                    Refresh();
-                });
-            _zoomSettle.ExecuteLater(150);
+            BeginGesture();
             Refresh();
             ViewChanged?.Invoke();
             evt.StopPropagation();

@@ -109,9 +109,13 @@ namespace UnityNetworkViewer.Editor
         {
             if (!Enabled) return;
             _objectEventsThisWindow = true;
+            // Animation ウィンドウ・Timeline のプレビュー中は値が毎フレーム書き換わるが、保存される変更ではないため再解析しない
+            bool previewing = AnimationMode.InAnimationMode();
             for (int i = 0; i < stream.length; i++)
             {
-                switch (stream.GetEventType(i))
+                var kind = stream.GetEventType(i);
+                if (previewing && kind == ObjectChangeKind.ChangeGameObjectOrComponentProperties) continue;
+                switch (kind)
                 {
                     case ObjectChangeKind.ChangeGameObjectOrComponentProperties:
                         stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var pr);
@@ -183,7 +187,7 @@ namespace UnityNetworkViewer.Editor
         void OnHierarchyChanged()
         {
             // ObjectChangeEvents で拾えなかった変更の保険。内容までは再解析せず、分割の差分だけを見る
-            if (!Enabled) return;
+            if (!Enabled || AnimationMode.InAnimationMode()) return;
             _hierarchyPending = true;
             Touch();
         }

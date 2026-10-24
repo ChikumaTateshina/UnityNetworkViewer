@@ -29,7 +29,7 @@ VRChat 連携アセンブリは `com.vrchat.worlds` 3.4.0 以上で自動的に�
    ```
    https://github.com/ChikumaTateshina/UnityNetworkViewer.git?path=/Packages/com.chikumatateshina.unitynetworkviewer
    ```
-   （特定の版に固定する場合は末尾に `#v0.3.0` などを付けます）
+   （特定の版に固定する場合は末尾に `#v0.5.0` などを付けます）
 3. **手動**: Release の zip をプロジェクトの `Packages/com.chikumatateshina.unitynetworkviewer/` に展開
 
 ## 使い方
